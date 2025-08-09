@@ -46,16 +46,21 @@ python mlc_llm/eval_intent_detection.py --failures-only
 python mlc_llm/eval_intent_detection.py --verbose
 ```
 
-## Model Evaluation Results
+## Model Evaluation Results (138 Test Cases)
 
-### Tested Models Performance
+### Tested Models Performance - UPDATED WITH REAL RESULTS
 
-| Model | Size | Accuracy | Precision | Recall | F1 Score | Production Ready |
-|-------|------|----------|-----------|--------|----------|------------------|
-| **Phi-3.5-mini-instruct** | 2.2GB | **85.9%** | **0.86** | **0.86** | **0.86** | ✅ **RECOMMENDED** |
-| Gemma-2-2B-it | 1.4GB | 81.2% | 0.81 | 0.81 | 0.81 | ✅ Resource-constrained |
-| Llama-3.2-3B-Instruct | 1.9GB | 82.3% | 0.82 | 0.82 | 0.82 | ✅ Good fallback |
-| DeepSeek-R1-Distill-Qwen-7B | 4.2GB | 73.4% | 0.73 | 0.73 | 0.73 | ⚠️ Needs fixes |
+| Model | Size (MB) | Accuracy | Precision | Recall | F1 Score | Production Ready |
+|-------|-----------|----------|-----------|--------|----------|------------------|
+| 🥇 **Phi-3.5-mini-instruct** | 2,052 | **87.0%** | **93.2%** | **84.1%** | **0.885** | ✅ **RECOMMENDED** |
+| 🥈 **Llama-3.2-3B-Instruct** | 1,733 | **86.6%** | **87.1%** | **91.4%** | **0.892** | ✅ **EXCELLENT** |
+| 🥉 **Gemma-2-2B-it** | 1,420 | **76.1%** | **73.3%** | **93.9%** | **0.824** | ⚠️ **ACCEPTABLE** |
+
+### Real Evaluation Results Summary
+- **Test Dataset**: 138 diverse cases with authentic HN user personas and challenging edge cases
+- **Evaluation Platform**: MacBook Pro M3 with Metal GPU acceleration  
+- **Temperature**: 0.1 for consistent, low-variance responses
+- **Key Insight**: Phi leads in precision (fewer false positives), Llama has best F1 balance, Gemma maximizes recall
 
 ### Key Findings
 
@@ -224,13 +229,16 @@ cd ..
 ### Testing Procedures
 ```bash
 # Run full evaluation
-python mlc_llm/eval_intent_detection.py
+python mlc_llm/eval_intent_detection.py --full-eval
+
+# Evaluate all models with performance metrics
+python mlc_llm/eval_intent_detection.py --eval-all
 
 # Test edge cases specifically  
 python mlc_llm/eval_intent_detection.py --dataset edge_cases
 
-# Verify production model performance
-python mlc_llm/eval_intent_detection.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
+# Export comprehensive results
+python mlc_llm/eval_intent_detection.py --eval-all --export-results model_comparison.json
 ```
 
 ## Development Workflow

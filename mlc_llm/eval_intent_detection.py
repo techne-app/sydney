@@ -73,7 +73,19 @@ class ModelComparison:
     accuracy_b: float
     disagreements: List[Tuple[str, EvalResult, EvalResult]]
 
-# Comprehensive test dataset
+@dataclass
+class ModelMetrics:
+    name: str
+    accuracy: float
+    precision: float
+    recall: float
+    f1_score: float
+    size_mb: float
+    avg_response_time: float
+    total_eval_time: float
+    total_test_cases: int
+
+# Comprehensive test dataset - Expanded to 128+ cases with diverse HN personas
 COMPREHENSIVE_TEST_CASES = [
     # === CLEAR SEARCH INTENTS (should be ACTION) ===
     TestCase("find discussions about AI", "action", "explicit_search", "easy", "Classic search command"),
@@ -87,6 +99,23 @@ COMPREHENSIVE_TEST_CASES = [
     TestCase("what's been said about Python lately?", "action", "question_search", "medium", "Recent discussion search"),
     TestCase("where can I find info on web3?", "action", "location_search", "medium", "Where-based search"),
     
+    # === DIVERSE HN USER PERSONAS - SEARCH INTENTS ===
+    TestCase("need threads about Docker for my DevOps project", "action", "professional_search", "medium", "DevOps professional seeking specific tech"),
+    TestCase("looking for YC founder stories", "action", "entrepreneur_search", "medium", "Entrepreneur seeking inspiration"),
+    TestCase("find security breach discussions from this year", "action", "security_search", "medium", "Security researcher seeking recent incidents"),
+    TestCase("show me salary threads for San Francisco engineers", "action", "career_search", "medium", "Career-focused user seeking compensation data"),
+    TestCase("any discussions about Rust performance benchmarks?", "action", "technical_search", "medium", "Systems programmer seeking technical data"),
+    TestCase("search climate tech investments", "action", "investor_search", "medium", "Investor seeking climate opportunities"),
+    TestCase("find posts about bootcamp vs CS degree", "action", "education_search", "medium", "Career changer seeking education advice"),
+    TestCase("look for threads on work-life balance in tech", "action", "lifestyle_search", "medium", "Burnout-conscious developer"),
+    TestCase("show me discussions about indie hacker failures", "action", "entrepreneur_search", "medium", "Solo entrepreneur learning from failures"),
+    TestCase("any posts about technical interviewing at FAANG?", "action", "career_search", "medium", "Job seeker preparing for big tech interviews"),
+    TestCase("find discussions about open source sustainability", "action", "community_search", "medium", "Open source maintainer seeking community insights"),
+    TestCase("search for posts about TypeScript migration stories", "action", "technical_search", "medium", "Frontend dev considering migration"),
+    TestCase("looking for threads on database scaling strategies", "action", "architecture_search", "medium", "Backend architect facing scaling challenges"),
+    TestCase("show me posts about AI ethics in hiring", "action", "ethics_search", "medium", "HR tech professional concerned about bias"),
+    TestCase("find discussions about mental health in startups", "action", "wellness_search", "medium", "Startup founder dealing with stress"),
+    
     # === CLEAR CONVERSATIONAL INTENTS (should be CHAT) ===
     TestCase("hello how are you", "chat", "greeting", "easy", "Simple greeting"),
     TestCase("what's your opinion on React?", "chat", "opinion_request", "medium", "Asking for opinion"),
@@ -99,7 +128,24 @@ COMPREHENSIVE_TEST_CASES = [
     TestCase("that's interesting", "chat", "reaction", "easy", "Reaction to information"),
     TestCase("good morning", "chat", "greeting", "easy", "Time-based greeting"),
     
-    # === AMBIGUOUS CASES (harder to classify) ===
+    # === DIVERSE HN USER PERSONAS - CONVERSATIONAL INTENTS ===
+    TestCase("explain why Python is so popular in data science", "chat", "technical_explanation", "medium", "Data scientist seeking conceptual understanding"),
+    TestCase("what makes a good engineering manager?", "chat", "career_advice", "medium", "IC transitioning to management"),
+    TestCase("how do you validate a SaaS idea?", "chat", "business_advice", "medium", "First-time founder seeking validation process"),
+    TestCase("why do so many startups fail?", "chat", "business_insight", "medium", "Curious observer seeking startup ecosystem understanding"),
+    TestCase("what's the difference between REST and GraphQL?", "chat", "technical_comparison", "medium", "Backend dev comparing API approaches"),
+    TestCase("how important is a computer science degree?", "chat", "education_discussion", "medium", "Self-taught programmer questioning formal education"),
+    TestCase("should I learn React or Vue as a beginner?", "chat", "technology_choice", "medium", "New developer seeking framework guidance"),
+    TestCase("what are the biggest mistakes in technical interviews?", "chat", "interview_advice", "medium", "Job seeker wanting to avoid common pitfalls"),
+    TestCase("how do you deal with imposter syndrome?", "chat", "psychological_support", "medium", "Developer struggling with confidence"),
+    TestCase("what's your take on the future of remote work?", "chat", "trend_discussion", "medium", "Professional curious about work evolution"),
+    TestCase("how do you stay motivated while learning to code?", "chat", "learning_support", "medium", "Bootcamp student facing motivation challenges"),
+    TestCase("what makes a programming language successful?", "chat", "language_philosophy", "medium", "Language designer seeking success patterns"),
+    TestCase("why is functional programming gaining popularity?", "chat", "paradigm_discussion", "medium", "OOP developer curious about FP trends"),
+    TestCase("how do you approach system design interviews?", "chat", "interview_strategy", "medium", "Senior engineer preparing for architecture interviews"),
+    TestCase("what's the hardest part about being a technical founder?", "chat", "founder_challenges", "medium", "Technical person considering entrepreneurship"),
+    
+    # === TRICKY AMBIGUOUS CASES (harder to classify) ===
     TestCase("what about React?", "action", "ambiguous", "hard", "Could be opinion or search - context dependent"),
     TestCase("thoughts on AI?", "chat", "ambiguous", "hard", "Asking for thoughts/opinions"),
     TestCase("anything on startups?", "action", "ambiguous", "hard", "Implicit search request"),
@@ -110,6 +156,20 @@ COMPREHENSIVE_TEST_CASES = [
     TestCase("I want to know about machine learning", "chat", "ambiguous", "medium", "Want to know - learning intent"),
     TestCase("what's going on with tech layoffs", "action", "ambiguous", "medium", "Current events - likely search"),
     TestCase("give me your take on remote work", "chat", "ambiguous", "medium", "Asking for opinion/perspective"),
+    
+    # === NEW TRICKY AMBIGUOUS CASES ===
+    TestCase("Docker", "action", "single_word", "hard", "Single technical term - likely search"),
+    TestCase("GraphQL vs REST", "action", "comparison_phrase", "hard", "Comparison phrase - likely seeking discussions"),
+    TestCase("thoughts?", "chat", "minimal_opinion", "hard", "Minimal opinion request - conversational"),
+    TestCase("worth it?", "chat", "evaluation_question", "hard", "Evaluation question - seeking judgment"),
+    TestCase("pros and cons of Kubernetes", "action", "analysis_request", "hard", "Could be search for discussions vs direct explanation"),
+    TestCase("why microservices", "chat", "reasoning_question", "hard", "Why question - seeking conceptual explanation"),
+    TestCase("best practices for API design", "action", "best_practices", "hard", "Could be search for discussions vs direct advice"),
+    TestCase("how to scale a startup", "action", "how_to_search", "hard", "How-to - could be search for stories vs direct advice"),
+    TestCase("startup funding rounds", "action", "topic_phrase", "hard", "Topic phrase - likely searching for discussions"),
+    TestCase("is Rust ready for production?", "chat", "readiness_question", "hard", "Readiness question - seeking opinion vs evidence"),
+    TestCase("MongoDB criticism", "action", "criticism_search", "hard", "Seeking critical discussions - likely search"),
+    TestCase("junior developer advice", "action", "advice_topic", "hard", "Could be searching for advice threads vs asking for advice"),
     
     # === EDGE CASES ===
     TestCase("", "chat", "edge_case", "hard", "Empty query"),
@@ -123,12 +183,29 @@ COMPREHENSIVE_TEST_CASES = [
     TestCase("find ai stuff", "action", "edge_case", "medium", "Casual language"),
     TestCase("yo, search for some tech stuff", "action", "edge_case", "medium", "Very casual language"),
     
+    # === MORE CHALLENGING EDGE CASES ===
+    TestCase("hmm", "chat", "contemplation", "hard", "Thinking sound - conversational"),
+    TestCase("ok", "chat", "acknowledgment", "hard", "Simple acknowledgment"),
+    TestCase("nah", "chat", "disagreement", "hard", "Casual disagreement"),
+    TestCase("lol", "chat", "reaction", "hard", "Laughter reaction"),
+    TestCase("...", "chat", "ellipsis", "hard", "Ellipsis - waiting or thinking"),
+    TestCase("aI mL", "action", "abbreviated_search", "hard", "Abbreviated technical terms"),
+    TestCase("react + next.js", "action", "compound_search", "medium", "Multi-technology search"),
+    TestCase("fintech 2024", "action", "temporal_topic", "medium", "Topic with year - likely search"),
+    TestCase("$TSLA discussion", "action", "stock_ticker", "medium", "Stock ticker format - seeking discussions"),
+    TestCase("YC W24", "action", "batch_notation", "medium", "YC batch notation - seeking info"),
+    
     # === CONTEXT-DEPENDENT CASES ===
     TestCase("more on this topic", "action", "context_dependent", "hard", "Needs conversation context"),
     TestCase("what else?", "action", "context_dependent", "hard", "Follow-up question"),
     TestCase("continue", "action", "context_dependent", "hard", "Continuation request"),
     TestCase("next", "action", "context_dependent", "hard", "Next request"),
     TestCase("similar threads", "action", "context_dependent", "hard", "Related content request"),
+    TestCase("more like this", "action", "context_dependent", "hard", "Similarity-based request"),
+    TestCase("related posts", "action", "context_dependent", "hard", "Related content search"),
+    TestCase("follow up", "action", "context_dependent", "hard", "Follow-up request"),
+    TestCase("expand on that", "chat", "context_dependent", "hard", "Asking for elaboration - conversational"),
+    TestCase("tell me more", "chat", "context_dependent", "hard", "More information request - conversational"),
     
     # === CONVERSATIONAL VARIATIONS ===
     TestCase("I'm curious about your thoughts on AI", "chat", "opinion_request", "medium", "Polite opinion request"),
@@ -144,23 +221,45 @@ COMPREHENSIVE_TEST_CASES = [
     TestCase("beginner-friendly posts on JavaScript?", "action", "quality_search", "medium", "Level-specific search"),
     TestCase("deep technical discussions on ML?", "action", "quality_search", "medium", "Depth-specific search"),
     
+    # === MORE SEARCH VARIATIONS ===
+    TestCase("highly upvoted posts on system design", "action", "quality_search", "medium", "Karma-filtered search"),
+    TestCase("recent hot takes on JavaScript frameworks", "action", "opinion_search", "medium", "Seeking hot takes/opinions"),
+    TestCase("threads with lots of comments about vim vs emacs", "action", "engagement_search", "medium", "High-engagement discussions"),
+    TestCase("posts from this week about OpenAI", "action", "temporal_search", "medium", "Week-based temporal search"),
+    TestCase("long-form posts about technical debt", "action", "format_search", "medium", "Format-specific search"),
+    TestCase("Ask HN posts about career transitions", "action", "category_search", "medium", "HN category-specific search"),
+    
     # === FALSE POSITIVES (should be CHAT but might be classified as ACTION) ===
     TestCase("what do you think I should search for?", "chat", "meta_search", "hard", "Meta-question about searching"),
     TestCase("how do I search effectively?", "chat", "meta_search", "medium", "Question about search process"),
     TestCase("should I look for React tutorials?", "chat", "advice_request", "medium", "Seeking advice about searching"),
     TestCase("is it worth searching for AI discussions?", "chat", "advice_request", "medium", "Value judgment question"),
+    TestCase("what's the best way to find good discussions?", "chat", "meta_search", "medium", "Meta question about discovery"),
+    TestCase("do you think I should research Docker?", "chat", "advice_request", "medium", "Seeking research advice"),
+    TestCase("would searching for Python help me?", "chat", "meta_search", "hard", "Questioning search utility"),
     
     # === COMMAND VARIATIONS ===
     TestCase("retrieve posts about startups", "action", "formal_search", "medium", "Formal search command"),
     TestCase("fetch discussions on blockchain", "action", "formal_search", "medium", "Technical search verb"),
     TestCase("pull up threads about Python", "action", "casual_search", "medium", "Casual search phrasing"),
     TestCase("bring up posts on remote work", "action", "casual_search", "medium", "Bring up variant"),
-    TestCase("surface discussions about web3", "action", "formal_search", "medium", "Surface as search verb")
+    TestCase("surface discussions about web3", "action", "formal_search", "medium", "Surface as search verb"),
+    TestCase("dig up posts about cryptocurrency", "action", "casual_search", "medium", "Dig up variant"),
+    TestCase("uncover threads on security vulnerabilities", "action", "formal_search", "medium", "Uncover as search verb"),
+    TestCase("track down discussions about TypeScript", "action", "casual_search", "medium", "Track down variant"),
+    
+    # === INTERNATIONAL/CULTURAL VARIATIONS ===
+    TestCase("cheers mate, find some React stuff", "action", "cultural_search", "medium", "British casual search"),
+    TestCase("could you please show me blockchain discussions?", "action", "polite_formal", "medium", "Very polite formal request"),
+    TestCase("I would be grateful if you could find AI posts", "action", "overly_polite", "medium", "Overly formal search request"),
+    TestCase("gimme some startup threads", "action", "casual_slang", "medium", "Very casual slang"),
+    TestCase("hook me up with some Python discussions", "action", "slang_search", "medium", "Slang-based search request")
 ]
 
 DEFAULT_MODELS = [
-    "Llama-3.2-3B-Instruct-q4f16_1-MLC",
-    "DeepSeek-R1-Distill-Qwen-7B-q4f16_1-MLC"
+    "Phi-3.5-mini-instruct-q4f16_1-MLC",
+    "gemma-2-2b-it-q4f16_1-MLC", 
+    "Llama-3.2-3B-Instruct-q4f16_1-MLC"
 ]
 
 def load_prompt_from_typescript():
@@ -215,7 +314,10 @@ class IntentEvaluator:
         self.model_name = model_name or DEFAULT_MODELS[0]
         self.prompt_template = load_prompt_from_typescript()
         self.results: List[EvalResult] = []
+        self.total_eval_time = 0.0
+        self.model_size_mb = 0.0
         self.find_model_path()
+        self.calculate_model_size()
     
     def find_model_path(self):
         """Find the local model path"""
@@ -237,6 +339,30 @@ class IntentEvaluator:
         
         print(f"❌ Model not found. Make sure models/{self.model_name} exists.")
         sys.exit(1)
+    
+    def calculate_model_size(self):
+        """Calculate total model size in MB"""
+        if not self.model_path:
+            return
+            
+        try:
+            total_size = 0
+            model_dir = Path(self.model_path)
+            
+            # Sum up all .bin files (model weights)
+            for bin_file in model_dir.glob('*.bin'):
+                total_size += bin_file.stat().st_size
+            
+            # Also include tokenizer and config files
+            for other_file in model_dir.glob('*.json'):
+                total_size += other_file.stat().st_size
+            
+            # Convert to MB
+            self.model_size_mb = total_size / (1024 * 1024)
+            
+        except Exception as e:
+            print(f"⚠️  Could not calculate model size: {e}")
+            self.model_size_mb = 0.0
     
     def init_engine(self):
         """Initialize the MLC engine"""
@@ -600,6 +726,118 @@ class IntentEvaluator:
         else:
             print(f"❌ Unsupported file format: {filepath.suffix}")
 
+def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, verbose: bool = False) -> List[ModelMetrics]:
+    """Evaluate all default models and return comprehensive metrics"""
+    print(f"🚀 EVALUATING ALL MODELS: {', '.join(DEFAULT_MODELS)}")
+    print("=" * 80)
+    
+    model_metrics = []
+    
+    for i, model_name in enumerate(DEFAULT_MODELS, 1):
+        print(f"\n📊 [{i}/{len(DEFAULT_MODELS)}] Evaluating {model_name}...")
+        print(f"🚀 Loading {model_name}...")
+        
+        try:
+            evaluator = IntentEvaluator(model_name)
+            results = evaluator.run_full_evaluation(temperature, dataset_filter, verbose=verbose)
+            metrics = evaluator.calculate_metrics(results)
+            
+            # Create ModelMetrics object
+            model_metric = ModelMetrics(
+                name=model_name,
+                accuracy=metrics.get('accuracy', 0),
+                precision=metrics.get('precision', 0),
+                recall=metrics.get('recall', 0),
+                f1_score=metrics.get('f1_score', 0),
+                size_mb=evaluator.model_size_mb,
+                avg_response_time=metrics.get('performance_stats', {}).get('avg_response_time', 0),
+                total_eval_time=evaluator.total_eval_time,
+                total_test_cases=len(results)
+            )
+            
+            model_metrics.append(model_metric)
+            
+            # Quick summary for this model
+            print(f"✅ {model_name} complete:")
+            print(f"   Accuracy: {model_metric.accuracy:.1%}")
+            print(f"   Size: {model_metric.size_mb:.1f} MB")
+            print(f"   Avg Response: {model_metric.avg_response_time:.3f}s")
+            
+            # Clean up memory
+            del evaluator
+            import gc
+            gc.collect()
+            
+        except Exception as e:
+            print(f"❌ Failed to evaluate {model_name}: {e}")
+            import traceback
+            if verbose:
+                traceback.print_exc()
+            continue
+    
+    return model_metrics
+
+def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
+    """Print a comprehensive comparison table of all models"""
+    if not model_metrics:
+        print("❌ No model metrics to display")
+        return
+    
+    print(f"\n🏆 MODEL COMPARISON TABLE")
+    print("=" * 100)
+    
+    # Sort by accuracy (descending)
+    sorted_metrics = sorted(model_metrics, key=lambda x: x.accuracy, reverse=True)
+    
+    # Table header
+    print(f"{'Model':<35} {'Size (MB)':<10} {'Accuracy':<10} {'Precision':<11} {'Recall':<8} {'F1':<6} {'Avg Time':<10} {'Status':<15}")
+    print("-" * 100)
+    
+    # Table rows
+    for i, metrics in enumerate(sorted_metrics):
+        # Determine status
+        if metrics.accuracy >= 0.85:
+            status = "✅ EXCELLENT"
+        elif metrics.accuracy >= 0.80:
+            status = "✅ GOOD"
+        elif metrics.accuracy >= 0.75:
+            status = "⚠️  ACCEPTABLE"
+        else:
+            status = "❌ POOR"
+        
+        # Highlight best model
+        model_name = metrics.name.replace("-q4f16_1-MLC", "")
+        if i == 0:
+            model_name = f"🥇 {model_name}"
+        elif i == 1:
+            model_name = f"🥈 {model_name}"
+        elif i == 2:
+            model_name = f"🥉 {model_name}"
+        
+        print(f"{model_name:<35} {metrics.size_mb:<10.1f} {metrics.accuracy:<10.1%} "
+              f"{metrics.precision:<11.1%} {metrics.recall:<8.1%} {metrics.f1_score:<6.3f} "
+              f"{metrics.avg_response_time:<10.3f} {status:<15}")
+    
+    # Summary statistics
+    print("\n📈 SUMMARY STATISTICS:")
+    accuracies = [m.accuracy for m in model_metrics]
+    sizes = [m.size_mb for m in model_metrics]
+    times = [m.avg_response_time for m in model_metrics]
+    
+    print(f"   Best Accuracy: {max(accuracies):.1%} ({sorted_metrics[0].name.replace('-q4f16_1-MLC', '')})")
+    print(f"   Smallest Model: {min(sizes):.1f} MB")
+    print(f"   Fastest Response: {min(times):.3f}s")
+    
+    # Recommendations
+    best_overall = sorted_metrics[0]
+    smallest = min(model_metrics, key=lambda x: x.size_mb)
+    fastest = min(model_metrics, key=lambda x: x.avg_response_time)
+    
+    print(f"\n💡 RECOMMENDATIONS:")
+    print(f"   🏆 Best Overall: {best_overall.name.replace('-q4f16_1-MLC', '')} ({best_overall.accuracy:.1%} accuracy)")
+    print(f"   📱 Most Efficient: {smallest.name.replace('-q4f16_1-MLC', '')} ({smallest.size_mb:.1f} MB)")
+    print(f"   ⚡ Fastest: {fastest.name.replace('-q4f16_1-MLC', '')} ({fastest.avg_response_time:.3f}s avg)")
+
 def compare_models(model_a: str, model_b: str, temperature: float = 0.1, dataset_filter: str = None, verbose: bool = False) -> ModelComparison:
     """Compare two models sequentially to avoid memory issues"""
     print(f"🔬 COMPARING MODELS: {model_a} vs {model_b}")
@@ -744,6 +982,7 @@ def export_comparison(comparison: ModelComparison, filename: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description='Comprehensive intent detection evaluation')
     parser.add_argument('--full-eval', action='store_true', help='Run full evaluation on all test cases')
+    parser.add_argument('--eval-all', action='store_true', help='Evaluate all default models (Phi, Gemma, Llama)')
     parser.add_argument('--dataset', help='Filter test cases by category (e.g., "ambiguous", "edge_case")')
     parser.add_argument('--temp', type=float, default=0.1, help='Temperature (0.0-1.0)')
     parser.add_argument('--analyze-failures', action='store_true', help='Show detailed failure analysis')
@@ -754,6 +993,44 @@ def main():
     parser.add_argument('--export-comparison', help='Export comparison results to file (.json)')
     
     args = parser.parse_args()
+    
+    # Handle evaluation of all models
+    if args.eval_all:
+        try:
+            model_metrics = evaluate_all_models(
+                temperature=args.temp,
+                dataset_filter=args.dataset,
+                verbose=not args.quiet
+            )
+            
+            print_model_comparison_table(model_metrics)
+            
+            if args.export_results:
+                # Export comprehensive results
+                export_data = {
+                    "metadata": {
+                        "total_models": len(model_metrics),
+                        "test_cases": model_metrics[0].total_test_cases if model_metrics else 0,
+                        "temperature": args.temp,
+                        "dataset_filter": args.dataset
+                    },
+                    "models": [asdict(m) for m in model_metrics]
+                }
+                
+                filepath = Path(args.export_results)
+                with open(filepath, 'w') as f:
+                    json.dump(export_data, f, indent=2)
+                print(f"\n📄 Results exported to {filepath}")
+                
+        except KeyboardInterrupt:
+            print("\n👋 Interrupted by user")
+        except Exception as e:
+            print(f"❌ Error in eval-all: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+        
+        return 0
     
     # Handle model comparison
     if args.compare:
@@ -785,6 +1062,7 @@ def main():
     if not any([args.full_eval, args.dataset, args.analyze_failures]):
         parser.print_help()
         print(f"\nExamples:")
+        print(f"  python mlc_llm/eval_intent_detection.py --eval-all")
         print(f"  python mlc_llm/eval_intent_detection.py --full-eval")
         print(f"  python mlc_llm/eval_intent_detection.py --dataset ambiguous --temp 0.2")
         print(f"  python mlc_llm/eval_intent_detection.py --full-eval --export-results results.json")

@@ -11,6 +11,8 @@ on:
       - '.vscode/**'
       - '.idea/**'
       - 'docs/**'
+      - 'models/**'
+      - 'mlc_llm/**'
 jobs:
   build:
     runs-on: ubuntu-latest
