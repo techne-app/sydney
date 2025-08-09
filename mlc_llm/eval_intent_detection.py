@@ -24,6 +24,15 @@ from typing import Dict, List, Tuple, Optional
 import statistics
 
 try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    # Fallback progress function
+    def tqdm(iterable, **kwargs):
+        return iterable
+
+try:
     from mlc_llm import MLCEngine
     MLC_AVAILABLE = True
 except ImportError:
@@ -52,6 +61,17 @@ class EvalResult:
     category: str
     difficulty: str
     notes: str
+    model_name: str = ""
+
+@dataclass
+class ModelComparison:
+    model_a: str
+    model_b: str
+    results_a: List[EvalResult]
+    results_b: List[EvalResult]
+    accuracy_a: float
+    accuracy_b: float
+    disagreements: List[Tuple[str, EvalResult, EvalResult]]
 
 # Comprehensive test dataset
 COMPREHENSIVE_TEST_CASES = [
@@ -138,7 +158,10 @@ COMPREHENSIVE_TEST_CASES = [
     TestCase("surface discussions about web3", "action", "formal_search", "medium", "Surface as search verb")
 ]
 
-MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC"
+DEFAULT_MODELS = [
+    "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+    "DeepSeek-R1-Distill-Qwen-7B-q4f16_1-MLC"
+]
 
 def load_prompt_from_typescript():
     """Load the shared prompt from TypeScript file"""
@@ -186,9 +209,10 @@ Examples:
 JSON Response:"""
 
 class IntentEvaluator:
-    def __init__(self):
+    def __init__(self, model_name: str = None):
         self.engine = None
         self.model_path = None
+        self.model_name = model_name or DEFAULT_MODELS[0]
         self.prompt_template = load_prompt_from_typescript()
         self.results: List[EvalResult] = []
         self.find_model_path()
@@ -196,7 +220,7 @@ class IntentEvaluator:
     def find_model_path(self):
         """Find the local model path"""
         current_dir = Path.cwd()
-        model_dir = current_dir / "models" / MODEL
+        model_dir = current_dir / "models" / self.model_name
         
         if model_dir.exists():
             self.model_path = str(model_dir)
@@ -205,13 +229,13 @@ class IntentEvaluator:
         script_dir = Path(__file__).parent
         if script_dir.name == "mlc_llm":
             repo_root = script_dir.parent
-            model_dir = repo_root / "models" / MODEL
+            model_dir = repo_root / "models" / self.model_name
             
             if model_dir.exists():
                 self.model_path = str(model_dir)
                 return
         
-        print(f"❌ Model not found. Make sure models/{MODEL} exists.")
+        print(f"❌ Model not found. Make sure models/{self.model_name} exists.")
         sys.exit(1)
     
     def init_engine(self):
@@ -240,7 +264,7 @@ class IntentEvaluator:
             response = self.engine.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
-                max_tokens=200,
+                max_tokens=500,  # Increased for reasoning models
                 stream=False
             )
             return response.choices[0].message.content
@@ -254,11 +278,21 @@ class IntentEvaluator:
             return {"error": "No response from model"}
             
         try:
-            json_match = re.search(r'\{[^{}]*\}', response)
-            if not json_match:
-                return {"error": "No JSON found in response", "raw": response}
+            # Handle reasoning models with <think> tags
+            cleaned_response = response
+            if '<think>' in response:
+                # Remove thinking blocks
+                cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
             
-            json_text = json_match.group()
+            # Extract JSON from response - improved regex for nested structures
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_response)
+            if not json_match:
+                # Fallback: try to find any JSON-like structure
+                json_match = re.search(r'\{.*?\}', cleaned_response, flags=re.DOTALL)
+                if not json_match:
+                    return {"error": "No JSON found in response", "raw": response}
+            
+            json_text = json_match.group().strip()
             parsed = json.loads(json_text)
             
             if "isSearch" not in parsed or not isinstance(parsed["isSearch"], bool):
@@ -311,7 +345,8 @@ class IntentEvaluator:
             correct=correct,
             category=test_case.category,
             difficulty=test_case.difficulty,
-            notes=test_case.notes
+            notes=test_case.notes,
+            model_name=self.model_name
         )
         
         if verbose:
@@ -334,9 +369,20 @@ class IntentEvaluator:
             print(f"📊 Running full evaluation on {len(test_cases)} test cases")
         
         results = []
-        for i, test_case in enumerate(test_cases, 1):
+        
+        # Use tqdm if available, otherwise fallback to manual progress
+        if TQDM_AVAILABLE and not verbose:
+            iterator = tqdm(test_cases, desc=f"Evaluating {self.model_name}", unit="test")
+        else:
+            iterator = test_cases
+        
+        for i, test_case in enumerate(iterator, 1):
             if verbose:
                 print(f"\nProgress: {i}/{len(test_cases)}")
+            elif not TQDM_AVAILABLE:
+                # Show progress even in quiet mode for comparisons when no tqdm
+                if i % 10 == 0 or i == len(test_cases):
+                    print(f"📊 Progress: {i}/{len(test_cases)} ({i/len(test_cases)*100:.0f}%)")
             
             result = self.evaluate_test_case(test_case, temperature, verbose)
             if result:
@@ -532,7 +578,7 @@ class IntentEvaluator:
             export_data = {
                 "metadata": {
                     "total_cases": len(results),
-                    "model": MODEL,
+                    "model": self.model_name,
                     "timestamp": str(Path(__file__).stat().st_mtime)
                 },
                 "metrics": self.calculate_metrics(results),
@@ -547,12 +593,153 @@ class IntentEvaluator:
             # Export to CSV
             with open(filepath, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['query', 'expected', 'predicted', 'confidence', 'correct', 'category', 'difficulty', 'reasoning', 'notes'])
+                writer.writerow(['query', 'expected', 'predicted', 'confidence', 'correct', 'category', 'difficulty', 'reasoning', 'notes', 'model'])
                 for r in results:
-                    writer.writerow([r.query, r.expected, r.predicted, r.confidence, r.correct, r.category, r.difficulty, r.reasoning, r.notes])
+                    writer.writerow([r.query, r.expected, r.predicted, r.confidence, r.correct, r.category, r.difficulty, r.reasoning, r.notes, r.model_name])
             print(f"📄 Results exported to {filepath}")
         else:
             print(f"❌ Unsupported file format: {filepath.suffix}")
+
+def compare_models(model_a: str, model_b: str, temperature: float = 0.1, dataset_filter: str = None, verbose: bool = False) -> ModelComparison:
+    """Compare two models sequentially to avoid memory issues"""
+    print(f"🔬 COMPARING MODELS: {model_a} vs {model_b}")
+    print("=" * 60)
+    
+    # Evaluate model A
+    print(f"\n📊 Evaluating {model_a}...")
+    print(f"🚀 Loading {model_a}...")
+    evaluator_a = IntentEvaluator(model_a)
+    results_a = evaluator_a.run_full_evaluation(temperature, dataset_filter, verbose=False)
+    metrics_a = evaluator_a.calculate_metrics(results_a)
+    
+    # 🧹 Clean up model A from memory
+    del evaluator_a
+    import gc
+    gc.collect()
+    print(f"✅ {model_a} evaluation complete, memory freed")
+    
+    # Evaluate model B  
+    print(f"\n📊 Evaluating {model_b}...")
+    print(f"🚀 Loading {model_b}...")
+    evaluator_b = IntentEvaluator(model_b)
+    results_b = evaluator_b.run_full_evaluation(temperature, dataset_filter, verbose=False)
+    metrics_b = evaluator_b.calculate_metrics(results_b)
+    
+    # 🧹 Clean up model B from memory
+    del evaluator_b
+    gc.collect()
+    print(f"✅ Model B evaluation complete, memory freed")
+    
+    # Find disagreements
+    disagreements = []
+    for ra, rb in zip(results_a, results_b):
+        if ra.query == rb.query and ra.predicted != rb.predicted:
+            disagreements.append((ra.query, ra, rb))
+    
+    comparison = ModelComparison(
+        model_a=model_a,
+        model_b=model_b,
+        results_a=results_a,
+        results_b=results_b,
+        accuracy_a=metrics_a.get('accuracy', 0),
+        accuracy_b=metrics_b.get('accuracy', 0),
+        disagreements=disagreements
+    )
+    
+    return comparison
+
+def print_comparison_report(comparison: ModelComparison) -> None:
+    """Print comprehensive model comparison report"""
+    print(f"\n🏆 MODEL COMPARISON REPORT")
+    print("=" * 50)
+    
+    # Overall comparison
+    print(f"\n📊 OVERALL PERFORMANCE:")
+    print(f"   {comparison.model_a:30s}: {comparison.accuracy_a:5.1%}")
+    print(f"   {comparison.model_b:30s}: {comparison.accuracy_b:5.1%}")
+    
+    winner = comparison.model_a if comparison.accuracy_a > comparison.accuracy_b else comparison.model_b
+    diff = abs(comparison.accuracy_a - comparison.accuracy_b)
+    print(f"   🏅 Winner: {winner} (+{diff:.1%})")
+    
+    # Disagreement analysis
+    print(f"\n🤔 DISAGREEMENTS: {len(comparison.disagreements)} cases")
+    if comparison.disagreements:
+        print("   Top disagreements:")
+        for i, (query, result_a, result_b) in enumerate(comparison.disagreements[:10]):
+            print(f"\n   {i+1}. \"{query}\"")
+            print(f"      Expected: {result_a.expected}")
+            print(f"      {comparison.model_a}: {result_a.predicted} (conf: {result_a.confidence:.2f})")
+            print(f"      {comparison.model_b}: {result_b.predicted} (conf: {result_b.confidence:.2f})")
+            
+            # Show which model was correct
+            a_correct = result_a.correct
+            b_correct = result_b.correct
+            if a_correct and not b_correct:
+                print(f"      ✅ {comparison.model_a} correct, {comparison.model_b} wrong")
+            elif b_correct and not a_correct:
+                print(f"      ✅ {comparison.model_b} correct, {comparison.model_a} wrong")
+            elif not a_correct and not b_correct:
+                print(f"      ❌ Both models wrong")
+    
+    # Category analysis
+    print(f"\n📂 PERFORMANCE BY CATEGORY:")
+    category_stats_a = defaultdict(lambda: {"correct": 0, "total": 0})
+    category_stats_b = defaultdict(lambda: {"correct": 0, "total": 0})
+    
+    for result in comparison.results_a:
+        category_stats_a[result.category]["total"] += 1
+        if result.correct:
+            category_stats_a[result.category]["correct"] += 1
+    
+    for result in comparison.results_b:
+        category_stats_b[result.category]["total"] += 1
+        if result.correct:
+            category_stats_b[result.category]["correct"] += 1
+    
+    all_categories = set(category_stats_a.keys()) | set(category_stats_b.keys())
+    for category in sorted(all_categories):
+        acc_a = category_stats_a[category]["correct"] / category_stats_a[category]["total"] if category_stats_a[category]["total"] > 0 else 0
+        acc_b = category_stats_b[category]["correct"] / category_stats_b[category]["total"] if category_stats_b[category]["total"] > 0 else 0
+        
+        better = "A" if acc_a > acc_b else "B" if acc_b > acc_a else "="
+        print(f"   {category:20s}: {acc_a:5.1%} vs {acc_b:5.1%} ({better})")
+
+def export_comparison(comparison: ModelComparison, filename: str) -> None:
+    """Export model comparison to file"""
+    filepath = Path(filename)
+    
+    if filepath.suffix.lower() == '.json':
+        export_data = {
+            "metadata": {
+                "model_a": comparison.model_a,
+                "model_b": comparison.model_b,
+                "accuracy_a": comparison.accuracy_a,
+                "accuracy_b": comparison.accuracy_b,
+                "disagreements": len(comparison.disagreements)
+            },
+            "disagreements": [
+                {
+                    "query": query,
+                    "expected": ra.expected,
+                    "model_a_prediction": ra.predicted,
+                    "model_a_confidence": ra.confidence,
+                    "model_b_prediction": rb.predicted, 
+                    "model_b_confidence": rb.confidence,
+                    "model_a_correct": ra.correct,
+                    "model_b_correct": rb.correct
+                }
+                for query, ra, rb in comparison.disagreements
+            ],
+            "results_a": [asdict(r) for r in comparison.results_a],
+            "results_b": [asdict(r) for r in comparison.results_b]
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(export_data, f, indent=2)
+        print(f"📄 Comparison exported to {filepath}")
+    else:
+        print(f"❌ Unsupported format for comparison export: {filepath.suffix}")
 
 def main():
     parser = argparse.ArgumentParser(description='Comprehensive intent detection evaluation')
@@ -562,18 +749,50 @@ def main():
     parser.add_argument('--analyze-failures', action='store_true', help='Show detailed failure analysis')
     parser.add_argument('--export-results', help='Export results to file (.json or .csv)')
     parser.add_argument('--quiet', action='store_true', help='Reduce output verbosity')
+    parser.add_argument('--model', help=f'Model to use (default: {DEFAULT_MODELS[0]})')
+    parser.add_argument('--compare', nargs=2, metavar=('MODEL_A', 'MODEL_B'), help='Compare two models side-by-side')
+    parser.add_argument('--export-comparison', help='Export comparison results to file (.json)')
     
     args = parser.parse_args()
     
+    # Handle model comparison
+    if args.compare:
+        try:
+            comparison = compare_models(
+                args.compare[0], 
+                args.compare[1], 
+                temperature=args.temp,
+                dataset_filter=args.dataset,
+                verbose=not args.quiet
+            )
+            
+            print_comparison_report(comparison)
+            
+            if args.export_comparison:
+                export_comparison(comparison, args.export_comparison)
+                
+        except KeyboardInterrupt:
+            print("\n👋 Interrupted by user")
+        except Exception as e:
+            print(f"❌ Error in comparison: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+        
+        return 0
+    
+    # Single model evaluation
     if not any([args.full_eval, args.dataset, args.analyze_failures]):
         parser.print_help()
         print(f"\nExamples:")
         print(f"  python mlc_llm/eval_intent_detection.py --full-eval")
         print(f"  python mlc_llm/eval_intent_detection.py --dataset ambiguous --temp 0.2")
         print(f"  python mlc_llm/eval_intent_detection.py --full-eval --export-results results.json")
+        print(f"  python mlc_llm/eval_intent_detection.py --compare {DEFAULT_MODELS[0]} {DEFAULT_MODELS[1]}")
         return
     
-    evaluator = IntentEvaluator()
+    model_name = args.model or DEFAULT_MODELS[0]
+    evaluator = IntentEvaluator(model_name)
     
     try:
         if args.full_eval or args.dataset:

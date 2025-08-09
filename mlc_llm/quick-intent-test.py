@@ -16,8 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC"
-# MODEL = "Phi-4-mini-instruct-q4f16_1-MLC"
+DEFAULT_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC"
 
 try:
     from mlc_llm import MLCEngine
@@ -119,16 +118,17 @@ if PROMPT_TEMPLATE:
     print(f"🔍 PROMPT_TEMPLATE end (last 100 chars): {repr(PROMPT_TEMPLATE[-100:])}")
 
 class IntentTester:
-    def __init__(self):
+    def __init__(self, model_name=None):
         self.engine = None
         self.model_path = None
+        self.model_name = model_name or DEFAULT_MODEL
         self.find_model_path()
     
     def find_model_path(self):
         """Find the local model path"""
         # Try from current directory first (extension root)
         current_dir = Path.cwd()
-        model_dir = current_dir / "models" / MODEL
+        model_dir = current_dir / "models" / self.model_name
         
         if model_dir.exists():
             self.model_path = str(model_dir)
@@ -139,7 +139,7 @@ class IntentTester:
         script_dir = Path(__file__).parent
         if script_dir.name == "mlc_llm":
             repo_root = script_dir.parent
-            model_dir = repo_root / "models" / MODEL
+            model_dir = repo_root / "models" / self.model_name
             
             if model_dir.exists():
                 self.model_path = str(model_dir)
@@ -147,12 +147,12 @@ class IntentTester:
                 return
         
         print(f"❌ Model not found. Tried:")
-        print(f"   - {current_dir / 'models' / MODEL}")
+        print(f"   - {current_dir / 'models' / self.model_name}")
         if script_dir.name == "mlc_llm":
             repo_root = script_dir.parent
-            print(f"   - {repo_root / 'models' / MODEL}")
+            print(f"   - {repo_root / 'models' / self.model_name}")
         print("💡 Make sure you're running from the repo root directory")
-        print("💡 Or that the models/ folder exists with the Llama model")
+        print("💡 Or that the models/ folder exists with the specified model")
         sys.exit(1)
     
     def init_engine(self):
@@ -184,7 +184,7 @@ class IntentTester:
             response = self.engine.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
-                max_tokens=200,
+                max_tokens=500,  # Increased for reasoning models
                 stream=False
             )
             
@@ -208,12 +208,21 @@ class IntentTester:
             return {"error": "No response from model"}
             
         try:
-            # Extract JSON from response (in case there's extra text)
-            json_match = re.search(r'\{[^{}]*\}', response)
-            if not json_match:
-                return {"error": "No JSON found in response", "raw": response}
+            # Handle reasoning models with <think> tags
+            cleaned_response = response
+            if '<think>' in response:
+                # Remove thinking blocks
+                cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
             
-            json_text = json_match.group()
+            # Extract JSON from response - improved regex for nested structures
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_response)
+            if not json_match:
+                # Fallback: try to find any JSON-like structure
+                json_match = re.search(r'\{.*?\}', cleaned_response, flags=re.DOTALL)
+                if not json_match:
+                    return {"error": "No JSON found in response", "raw": response}
+            
+            json_text = json_match.group().strip()
             print(f"🔍 Extracted JSON: {repr(json_text[:200])}")  # Debug what JSON we're trying to parse
             
             parsed = json.loads(json_text)
@@ -329,6 +338,7 @@ def main():
     parser.add_argument('query', nargs='?', help='Query to test')
     parser.add_argument('--batch', action='store_true', help='Test all queries')
     parser.add_argument('--temp', type=float, default=0.1, help='Temperature (0.0-1.0)')
+    parser.add_argument('--model', default=DEFAULT_MODEL, help='Model to use')
     
     args = parser.parse_args()
     
@@ -340,7 +350,7 @@ def main():
         print(f"  python mlc_llm/quick-intent-test.py --temp 0.3 \"search for React\"")
         return
     
-    tester = IntentTester()
+    tester = IntentTester(args.model)
     
     try:
         if args.batch:

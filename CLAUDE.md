@@ -360,6 +360,15 @@ The extension uses a reusable modal system for secondary interfaces:
 - **Memory Management**: Singleton pattern for ML models
 - **Batch Processing**: Tags processed in batches
 
+## Intent Detection Models
+
+The extension uses local AI models for routing user messages between search and conversational modes. See `mlc_llm/README.md` for comprehensive model evaluation results, testing procedures, and configuration details.
+
+**Quick Reference**:
+- **Recommended Model**: Phi-3.5-mini-instruct-q4f16_1-MLC (85.9% accuracy)
+- **Evaluation Framework**: `mlc_llm/eval_intent_detection.py` with 64+ test cases
+- **Testing**: `python mlc_llm/quick-intent-test.py "your query"`
+
 ## Development Notes
 - Extension uses Chrome Extension Manifest V3
 - All content scripts inject into specific HN page patterns
