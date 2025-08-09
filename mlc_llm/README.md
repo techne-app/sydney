@@ -4,12 +4,27 @@ This directory contains tools for evaluating and testing intent detection models
 
 ## Overview
 
-The intent detection system determines whether user messages are asking to **SEARCH** for existing discussions or asking for **CONVERSATIONAL** responses. This is critical for routing user requests appropriately in the chat interface.
+The intent detection system uses a **two-phase classification approach** to route user requests in the chat interface:
+
+### Phase 1: Chat vs Action Classification
+Determines whether user messages are asking for **CONVERSATIONAL** responses or want the system to **DO SOMETHING** (take action).
+
+- **chat**: User wants conversation, explanations, opinions, advice, or general discussion
+- **action**: User wants the system to perform an action - search, find, retrieve, create, analyze, etc.
+
+### Phase 2: Action Type Classification  
+For messages classified as "action", determines the specific action type:
+
+- **search**: Find, show, retrieve, discover HN content/discussions  
+- **create**: Generate, write, build something new (future)
+- **analyze**: Analyze trends, compare, synthesize information (future)
+
+This two-phase approach is **extensible and MCP-ready** - new action types can be added without retraining Phase 1, and the architecture naturally maps to tool calling patterns for future MCP server integration.
 
 ## Scripts
 
 ### `quick-intent-test.py`
-Interactive testing tool for individual queries or batch testing.
+Interactive testing tool for individual queries or batch testing (legacy, single-phase).
 
 ```bash
 # Test a single query
@@ -25,8 +40,31 @@ python mlc_llm/quick-intent-test.py --batch
 python mlc_llm/quick-intent-test.py --temp 0.3 "what about startups?"
 ```
 
-### `eval_intent_detection.py`
-Comprehensive evaluation framework with advanced metrics and model comparison.
+### `intent_evaluation_framework.py` 🆕
+**NEW**: Modular evaluation framework supporting two-phase classification with separate test case files.
+
+```bash
+# Phase 1 evaluation (chat vs action)
+python mlc_llm/intent_evaluation_framework.py --phase phase1 --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
+
+# Phase 2 evaluation (action type classification)  
+python mlc_llm/intent_evaluation_framework.py --phase phase2 --model "Llama-3.2-3B-Instruct-q4f16_1-MLC"
+
+# Evaluate both phases
+python mlc_llm/intent_evaluation_framework.py --phase both --models "Phi-3.5-mini-instruct-q4f16_1-MLC" "Llama-3.2-3B-Instruct-q4f16_1-MLC"
+
+# Filter by category or difficulty
+python mlc_llm/intent_evaluation_framework.py --phase phase1 --category-filter explicit_search --difficulty-filter hard
+
+# Compare multiple models across phases
+python mlc_llm/intent_evaluation_framework.py --models "Phi-3.5-mini-instruct-q4f16_1-MLC" "Llama-3.2-3B-Instruct-q4f16_1-MLC" --phase both
+
+# Export results to JSON
+python mlc_llm/intent_evaluation_framework.py --phase phase1 --export results_phase1.json
+```
+
+### `eval_intent_detection.py` (Legacy)
+Original comprehensive evaluation framework with embedded test cases.
 
 ```bash
 # Full evaluation with default model
@@ -46,29 +84,45 @@ python mlc_llm/eval_intent_detection.py --failures-only
 python mlc_llm/eval_intent_detection.py --verbose
 ```
 
-## Model Evaluation Results (138 Test Cases)
+## Model Evaluation Results
 
-### Tested Models Performance - UPDATED WITH REAL RESULTS
+### Phase 1: Chat vs Action Classification (138 Test Cases)
 
-| Model | Size (MB) | Accuracy | Precision | Recall | F1 Score | Production Ready |
+| Model | Size (MB) | Accuracy | Precision | Recall | F1 Score | Production Ready | 
 |-------|-----------|----------|-----------|--------|----------|------------------|
-| 🥇 **Phi-3.5-mini-instruct** | 2,052 | **87.0%** | **93.2%** | **84.1%** | **0.885** | ✅ **RECOMMENDED** |
-| 🥈 **Llama-3.2-3B-Instruct** | 1,733 | **86.6%** | **87.1%** | **91.4%** | **0.892** | ✅ **EXCELLENT** |
+| 🥇 **Llama-3.2-3B-Instruct** | 1,733 | **88.9%** | **88.5%** | **93.9%** | **0.911** | ✅ **EXCELLENT** |
+| 🥈 **Phi-3.5-mini-instruct** | 2,052 | **87.0%** | **93.2%** | **84.1%** | **0.885** | ✅ **EXCELLENT** |
 | 🥉 **Gemma-2-2B-it** | 1,420 | **76.1%** | **73.3%** | **93.9%** | **0.824** | ⚠️ **ACCEPTABLE** |
 
+### Multi-Run Accuracy Analysis 📊
+**Accuracy across three evaluation runs (138 test cases each):**
+
+| Model | Run 1 | Run 2 | Run 3 | Mean | Std Dev |
+|-------|-------|-------|-------|------|---------|
+| **Llama-3.2-3B-Instruct** | 85.9% | 87.4% | 88.9% | **87.4%** | **±1.5%** |
+| **Phi-3.5-mini-instruct** | 85.9% | 87.0% | 87.0% | **86.6%** | **±0.6%** |
+| **Gemma-2-2B-it** | 76.1% | 76.1% | 76.1% | **76.1%** | **±0.0%** |
+
 ### Real Evaluation Results Summary
-- **Test Dataset**: 138 diverse cases with authentic HN user personas and challenging edge cases
+- **Test Dataset**: 138 comprehensive test cases from `intent_detection_testcases.json`
 - **Evaluation Platform**: MacBook Pro M3 with Metal GPU acceleration  
 - **Temperature**: 0.1 for consistent, low-variance responses
-- **Key Insight**: Phi leads in precision (fewer false positives), Llama has best F1 balance, Gemma maximizes recall
+- **Key Insight**: Llama leads in overall accuracy (88.9%) and F1 score (0.911), Phi has highest precision (93.2%)
 
 ### Key Findings
 
-#### ✅ Phi-3.5-mini-instruct (RECOMMENDED)
-- **Highest accuracy** at 85.9% with excellent JSON reliability
-- **Best balance** of performance, size (2.2GB), and reliability
-- **Strong disambiguation** between search and conversational intents
-- **Production ready** with robust error handling
+#### 🏆 Llama-3.2-3B-Instruct (RECOMMENDED)
+- **Highest accuracy** at 88.9% with consistent improvement across runs
+- **Best F1 score** at 0.911 showing excellent precision/recall balance  
+- **Strong recall** at 93.9% - catches more search intents with fewer false negatives
+- **Moderate size** at 1.7GB - good balance of performance and efficiency
+- **Production ready** with robust JSON parsing and error handling
+
+#### ✅ Phi-3.5-mini-instruct (ALTERNATIVE)
+- **Highest precision** at 93.2% - makes fewer false positive errors
+- **Very consistent** performance across runs (±0.6% variance)
+- **Larger model** at 2.0GB but more precise classifications
+- **Best for applications** where false positives (classifying chat as search) are costly
 
 #### ⚠️ Technical Issues Discovered
 
@@ -84,27 +138,47 @@ python mlc_llm/eval_intent_detection.py --verbose
 
 ## Test Dataset Structure
 
-The evaluation uses 64+ carefully crafted test cases across multiple categories:
+The evaluation uses test cases from `intent_detection_testcases.json` with structured metadata:
 
-### Explicit Search Intent (24 cases)
-- Direct search commands: "find discussions about AI"
-- Show/lookup requests: "show me posts about React"  
-- Question format searches: "any discussions on blockchain?"
+```json
+{
+  "metadata": {
+    "phase_1": "chat vs action (binary classification)",  
+    "phase_2": "action type classification (search, create, analyze, etc)",
+    "total_cases": 64,
+    "categories": ["explicit_search", "professional_search", "opinion_request", "ambiguous", ...],
+    "difficulty_levels": ["easy", "medium", "hard"]
+  },
+  "test_cases": [...]
+}
+```
 
-### Conversational Intent (21 cases)
-- Explanation requests: "what do you think about AI?"
-- Definition questions: "what is machine learning?"
-- Opinion seeking: "how do you feel about startups?"
+### Phase 1 Categories (Chat vs Action)
 
-### Ambiguous Cases (10 cases)  
-- Context-dependent: "what about React?"
-- Unclear intent: "tell me more"
-- Borderline cases requiring inference
+**Action Intent Categories:**
+- **explicit_search**: Clear search commands ("find AI discussions")
+- **professional_search**: Job-focused searches ("salary threads for SF engineers")  
+- **entrepreneur_search**: Startup-focused searches ("YC founder stories")
+- **technical_search**: Tech-specific searches ("Rust performance benchmarks")
+- **ambiguous**: Context-dependent cases ("what about React?")
+- **single_word**: Minimal queries ("Docker", "React?")
 
-### Edge Cases (9 cases)
-- Social interactions: "hello", "thanks", "good morning"
-- Empty/minimal input: "", "hmm", "ok"
-- Complex multi-part queries
+**Chat Intent Categories:**
+- **opinion_request**: Asking for opinions ("what's your take on AI?")
+- **explanation_request**: Seeking explanations ("can you explain ML?")
+- **technical_explanation**: Deep technical understanding requests
+- **career_advice**: Professional guidance questions
+- **greeting**: Social interactions ("hello", "thanks")
+
+### Phase 2 Categories (Action Types)
+Currently focused on **search** actions, with architecture ready for:
+- **create**: Generate/build content (future)
+- **analyze**: Trend analysis, comparisons (future)
+
+### Difficulty Distribution
+- **Easy**: 20% - Clear, unambiguous cases
+- **Medium**: 60% - Typical user patterns with some complexity  
+- **Hard**: 20% - Edge cases, ambiguous queries, minimal input
 
 ## Production Configuration
 

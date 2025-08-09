@@ -85,182 +85,44 @@ class ModelMetrics:
     total_eval_time: float
     total_test_cases: int
 
-# Comprehensive test dataset - Expanded to 128+ cases with diverse HN personas
-COMPREHENSIVE_TEST_CASES = [
-    # === CLEAR SEARCH INTENTS (should be ACTION) ===
-    TestCase("find discussions about AI", "action", "explicit_search", "easy", "Classic search command"),
-    TestCase("search for startups", "action", "explicit_search", "easy", "Direct search verb"),
-    TestCase("look up JavaScript discussions", "action", "explicit_search", "easy", "Look up variant"),
-    TestCase("show me posts about machine learning", "action", "explicit_search", "easy", "Show me variant"),
-    TestCase("get me some blockchain threads", "action", "explicit_search", "easy", "Get me variant"),
-    TestCase("can you find me discussions about React?", "action", "polite_search", "easy", "Polite search request"),
-    TestCase("I'm looking for threads on cryptocurrency", "action", "indirect_search", "medium", "Indirect search phrasing"),
-    TestCase("any posts about remote work?", "action", "question_search", "medium", "Question form search"),
-    TestCase("what's been said about Python lately?", "action", "question_search", "medium", "Recent discussion search"),
-    TestCase("where can I find info on web3?", "action", "location_search", "medium", "Where-based search"),
-    
-    # === DIVERSE HN USER PERSONAS - SEARCH INTENTS ===
-    TestCase("need threads about Docker for my DevOps project", "action", "professional_search", "medium", "DevOps professional seeking specific tech"),
-    TestCase("looking for YC founder stories", "action", "entrepreneur_search", "medium", "Entrepreneur seeking inspiration"),
-    TestCase("find security breach discussions from this year", "action", "security_search", "medium", "Security researcher seeking recent incidents"),
-    TestCase("show me salary threads for San Francisco engineers", "action", "career_search", "medium", "Career-focused user seeking compensation data"),
-    TestCase("any discussions about Rust performance benchmarks?", "action", "technical_search", "medium", "Systems programmer seeking technical data"),
-    TestCase("search climate tech investments", "action", "investor_search", "medium", "Investor seeking climate opportunities"),
-    TestCase("find posts about bootcamp vs CS degree", "action", "education_search", "medium", "Career changer seeking education advice"),
-    TestCase("look for threads on work-life balance in tech", "action", "lifestyle_search", "medium", "Burnout-conscious developer"),
-    TestCase("show me discussions about indie hacker failures", "action", "entrepreneur_search", "medium", "Solo entrepreneur learning from failures"),
-    TestCase("any posts about technical interviewing at FAANG?", "action", "career_search", "medium", "Job seeker preparing for big tech interviews"),
-    TestCase("find discussions about open source sustainability", "action", "community_search", "medium", "Open source maintainer seeking community insights"),
-    TestCase("search for posts about TypeScript migration stories", "action", "technical_search", "medium", "Frontend dev considering migration"),
-    TestCase("looking for threads on database scaling strategies", "action", "architecture_search", "medium", "Backend architect facing scaling challenges"),
-    TestCase("show me posts about AI ethics in hiring", "action", "ethics_search", "medium", "HR tech professional concerned about bias"),
-    TestCase("find discussions about mental health in startups", "action", "wellness_search", "medium", "Startup founder dealing with stress"),
-    
-    # === CLEAR CONVERSATIONAL INTENTS (should be CHAT) ===
-    TestCase("hello how are you", "chat", "greeting", "easy", "Simple greeting"),
-    TestCase("what's your opinion on React?", "chat", "opinion_request", "medium", "Asking for opinion"),
-    TestCase("can you explain machine learning?", "chat", "explanation_request", "medium", "Asking for explanation"),
-    TestCase("tell me about startups", "chat", "information_request", "medium", "General info request"),
-    TestCase("how does JavaScript work?", "chat", "how_question", "medium", "How question"),
-    TestCase("what is blockchain?", "chat", "definition_request", "medium", "Definition question"),
-    TestCase("thanks for your help", "chat", "gratitude", "easy", "Thank you message"),
-    TestCase("I don't understand", "chat", "confusion", "easy", "Confusion statement"),
-    TestCase("that's interesting", "chat", "reaction", "easy", "Reaction to information"),
-    TestCase("good morning", "chat", "greeting", "easy", "Time-based greeting"),
-    
-    # === DIVERSE HN USER PERSONAS - CONVERSATIONAL INTENTS ===
-    TestCase("explain why Python is so popular in data science", "chat", "technical_explanation", "medium", "Data scientist seeking conceptual understanding"),
-    TestCase("what makes a good engineering manager?", "chat", "career_advice", "medium", "IC transitioning to management"),
-    TestCase("how do you validate a SaaS idea?", "chat", "business_advice", "medium", "First-time founder seeking validation process"),
-    TestCase("why do so many startups fail?", "chat", "business_insight", "medium", "Curious observer seeking startup ecosystem understanding"),
-    TestCase("what's the difference between REST and GraphQL?", "chat", "technical_comparison", "medium", "Backend dev comparing API approaches"),
-    TestCase("how important is a computer science degree?", "chat", "education_discussion", "medium", "Self-taught programmer questioning formal education"),
-    TestCase("should I learn React or Vue as a beginner?", "chat", "technology_choice", "medium", "New developer seeking framework guidance"),
-    TestCase("what are the biggest mistakes in technical interviews?", "chat", "interview_advice", "medium", "Job seeker wanting to avoid common pitfalls"),
-    TestCase("how do you deal with imposter syndrome?", "chat", "psychological_support", "medium", "Developer struggling with confidence"),
-    TestCase("what's your take on the future of remote work?", "chat", "trend_discussion", "medium", "Professional curious about work evolution"),
-    TestCase("how do you stay motivated while learning to code?", "chat", "learning_support", "medium", "Bootcamp student facing motivation challenges"),
-    TestCase("what makes a programming language successful?", "chat", "language_philosophy", "medium", "Language designer seeking success patterns"),
-    TestCase("why is functional programming gaining popularity?", "chat", "paradigm_discussion", "medium", "OOP developer curious about FP trends"),
-    TestCase("how do you approach system design interviews?", "chat", "interview_strategy", "medium", "Senior engineer preparing for architecture interviews"),
-    TestCase("what's the hardest part about being a technical founder?", "chat", "founder_challenges", "medium", "Technical person considering entrepreneurship"),
-    
-    # === TRICKY AMBIGUOUS CASES (harder to classify) ===
-    TestCase("what about React?", "action", "ambiguous", "hard", "Could be opinion or search - context dependent"),
-    TestCase("thoughts on AI?", "chat", "ambiguous", "hard", "Asking for thoughts/opinions"),
-    TestCase("anything on startups?", "action", "ambiguous", "hard", "Implicit search request"),
-    TestCase("React?", "action", "ambiguous", "hard", "Single word - likely search"),
-    TestCase("tell me what you think about Python", "chat", "ambiguous", "hard", "Opinion request with 'tell me'"),
-    TestCase("what's new with cryptocurrency", "action", "ambiguous", "medium", "Could be news search or general question"),
-    TestCase("help me understand React", "chat", "ambiguous", "medium", "Help request - explanation vs search"),
-    TestCase("I want to know about machine learning", "chat", "ambiguous", "medium", "Want to know - learning intent"),
-    TestCase("what's going on with tech layoffs", "action", "ambiguous", "medium", "Current events - likely search"),
-    TestCase("give me your take on remote work", "chat", "ambiguous", "medium", "Asking for opinion/perspective"),
-    
-    # === NEW TRICKY AMBIGUOUS CASES ===
-    TestCase("Docker", "action", "single_word", "hard", "Single technical term - likely search"),
-    TestCase("GraphQL vs REST", "action", "comparison_phrase", "hard", "Comparison phrase - likely seeking discussions"),
-    TestCase("thoughts?", "chat", "minimal_opinion", "hard", "Minimal opinion request - conversational"),
-    TestCase("worth it?", "chat", "evaluation_question", "hard", "Evaluation question - seeking judgment"),
-    TestCase("pros and cons of Kubernetes", "action", "analysis_request", "hard", "Could be search for discussions vs direct explanation"),
-    TestCase("why microservices", "chat", "reasoning_question", "hard", "Why question - seeking conceptual explanation"),
-    TestCase("best practices for API design", "action", "best_practices", "hard", "Could be search for discussions vs direct advice"),
-    TestCase("how to scale a startup", "action", "how_to_search", "hard", "How-to - could be search for stories vs direct advice"),
-    TestCase("startup funding rounds", "action", "topic_phrase", "hard", "Topic phrase - likely searching for discussions"),
-    TestCase("is Rust ready for production?", "chat", "readiness_question", "hard", "Readiness question - seeking opinion vs evidence"),
-    TestCase("MongoDB criticism", "action", "criticism_search", "hard", "Seeking critical discussions - likely search"),
-    TestCase("junior developer advice", "action", "advice_topic", "hard", "Could be searching for advice threads vs asking for advice"),
-    
-    # === EDGE CASES ===
-    TestCase("", "chat", "edge_case", "hard", "Empty query"),
-    TestCase("???", "chat", "edge_case", "hard", "Just punctuation"),
-    TestCase("find", "action", "edge_case", "hard", "Incomplete search command"),
-    TestCase("search", "action", "edge_case", "hard", "Search without topic"),
-    TestCase("what", "chat", "edge_case", "hard", "Incomplete question"),
-    TestCase("seach for AI", "action", "edge_case", "medium", "Typo in search command"),
-    TestCase("finde discussions about React", "action", "edge_case", "medium", "Typo in search verb"),
-    TestCase("FIND AI DISCUSSIONS", "action", "edge_case", "medium", "All caps"),
-    TestCase("find ai stuff", "action", "edge_case", "medium", "Casual language"),
-    TestCase("yo, search for some tech stuff", "action", "edge_case", "medium", "Very casual language"),
-    
-    # === MORE CHALLENGING EDGE CASES ===
-    TestCase("hmm", "chat", "contemplation", "hard", "Thinking sound - conversational"),
-    TestCase("ok", "chat", "acknowledgment", "hard", "Simple acknowledgment"),
-    TestCase("nah", "chat", "disagreement", "hard", "Casual disagreement"),
-    TestCase("lol", "chat", "reaction", "hard", "Laughter reaction"),
-    TestCase("...", "chat", "ellipsis", "hard", "Ellipsis - waiting or thinking"),
-    TestCase("aI mL", "action", "abbreviated_search", "hard", "Abbreviated technical terms"),
-    TestCase("react + next.js", "action", "compound_search", "medium", "Multi-technology search"),
-    TestCase("fintech 2024", "action", "temporal_topic", "medium", "Topic with year - likely search"),
-    TestCase("$TSLA discussion", "action", "stock_ticker", "medium", "Stock ticker format - seeking discussions"),
-    TestCase("YC W24", "action", "batch_notation", "medium", "YC batch notation - seeking info"),
-    
-    # === CONTEXT-DEPENDENT CASES ===
-    TestCase("more on this topic", "action", "context_dependent", "hard", "Needs conversation context"),
-    TestCase("what else?", "action", "context_dependent", "hard", "Follow-up question"),
-    TestCase("continue", "action", "context_dependent", "hard", "Continuation request"),
-    TestCase("next", "action", "context_dependent", "hard", "Next request"),
-    TestCase("similar threads", "action", "context_dependent", "hard", "Related content request"),
-    TestCase("more like this", "action", "context_dependent", "hard", "Similarity-based request"),
-    TestCase("related posts", "action", "context_dependent", "hard", "Related content search"),
-    TestCase("follow up", "action", "context_dependent", "hard", "Follow-up request"),
-    TestCase("expand on that", "chat", "context_dependent", "hard", "Asking for elaboration - conversational"),
-    TestCase("tell me more", "chat", "context_dependent", "hard", "More information request - conversational"),
-    
-    # === CONVERSATIONAL VARIATIONS ===
-    TestCase("I'm curious about your thoughts on AI", "chat", "opinion_request", "medium", "Polite opinion request"),
-    TestCase("could you walk me through how React works?", "chat", "explanation_request", "medium", "Tutorial request"),
-    TestCase("I'd love to learn more about startups", "chat", "learning_intent", "medium", "Learning expression"),
-    TestCase("what would you say about machine learning?", "chat", "opinion_request", "medium", "Opinion question variant"),
-    TestCase("do you have any insights on blockchain?", "chat", "opinion_request", "medium", "Insights request"),
-    
-    # === SEARCH VARIATIONS ===
-    TestCase("any recent threads on AI?", "action", "temporal_search", "medium", "Time-based search"),
-    TestCase("popular posts about React?", "action", "quality_search", "medium", "Quality-filtered search"),
-    TestCase("controversial discussions on crypto?", "action", "quality_search", "medium", "Controversy search"),
-    TestCase("beginner-friendly posts on JavaScript?", "action", "quality_search", "medium", "Level-specific search"),
-    TestCase("deep technical discussions on ML?", "action", "quality_search", "medium", "Depth-specific search"),
-    
-    # === MORE SEARCH VARIATIONS ===
-    TestCase("highly upvoted posts on system design", "action", "quality_search", "medium", "Karma-filtered search"),
-    TestCase("recent hot takes on JavaScript frameworks", "action", "opinion_search", "medium", "Seeking hot takes/opinions"),
-    TestCase("threads with lots of comments about vim vs emacs", "action", "engagement_search", "medium", "High-engagement discussions"),
-    TestCase("posts from this week about OpenAI", "action", "temporal_search", "medium", "Week-based temporal search"),
-    TestCase("long-form posts about technical debt", "action", "format_search", "medium", "Format-specific search"),
-    TestCase("Ask HN posts about career transitions", "action", "category_search", "medium", "HN category-specific search"),
-    
-    # === FALSE POSITIVES (should be CHAT but might be classified as ACTION) ===
-    TestCase("what do you think I should search for?", "chat", "meta_search", "hard", "Meta-question about searching"),
-    TestCase("how do I search effectively?", "chat", "meta_search", "medium", "Question about search process"),
-    TestCase("should I look for React tutorials?", "chat", "advice_request", "medium", "Seeking advice about searching"),
-    TestCase("is it worth searching for AI discussions?", "chat", "advice_request", "medium", "Value judgment question"),
-    TestCase("what's the best way to find good discussions?", "chat", "meta_search", "medium", "Meta question about discovery"),
-    TestCase("do you think I should research Docker?", "chat", "advice_request", "medium", "Seeking research advice"),
-    TestCase("would searching for Python help me?", "chat", "meta_search", "hard", "Questioning search utility"),
-    
-    # === COMMAND VARIATIONS ===
-    TestCase("retrieve posts about startups", "action", "formal_search", "medium", "Formal search command"),
-    TestCase("fetch discussions on blockchain", "action", "formal_search", "medium", "Technical search verb"),
-    TestCase("pull up threads about Python", "action", "casual_search", "medium", "Casual search phrasing"),
-    TestCase("bring up posts on remote work", "action", "casual_search", "medium", "Bring up variant"),
-    TestCase("surface discussions about web3", "action", "formal_search", "medium", "Surface as search verb"),
-    TestCase("dig up posts about cryptocurrency", "action", "casual_search", "medium", "Dig up variant"),
-    TestCase("uncover threads on security vulnerabilities", "action", "formal_search", "medium", "Uncover as search verb"),
-    TestCase("track down discussions about TypeScript", "action", "casual_search", "medium", "Track down variant"),
-    
-    # === INTERNATIONAL/CULTURAL VARIATIONS ===
-    TestCase("cheers mate, find some React stuff", "action", "cultural_search", "medium", "British casual search"),
-    TestCase("could you please show me blockchain discussions?", "action", "polite_formal", "medium", "Very polite formal request"),
-    TestCase("I would be grateful if you could find AI posts", "action", "overly_polite", "medium", "Overly formal search request"),
-    TestCase("gimme some startup threads", "action", "casual_slang", "medium", "Very casual slang"),
-    TestCase("hook me up with some Python discussions", "action", "slang_search", "medium", "Slang-based search request")
-]
+# Test cases now loaded from JSON file
 
 DEFAULT_MODELS = [
     "Phi-3.5-mini-instruct-q4f16_1-MLC",
     "gemma-2-2b-it-q4f16_1-MLC", 
     "Llama-3.2-3B-Instruct-q4f16_1-MLC"
 ]
+
+def load_test_cases_from_json(json_file: str = "mlc_llm/intent_detection_testcases.json") -> List[TestCase]:
+    """Load test cases from JSON file"""
+    try:
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        
+        test_cases_data = data.get('test_cases', [])
+        
+        test_cases = [
+            TestCase(
+                query=case['query'],
+                expected=case['expected'], 
+                category=case['category'],
+                difficulty=case['difficulty'],
+                notes=case.get('notes', '')
+            )
+            for case in test_cases_data
+        ]
+        
+        print(f"✅ Loaded {len(test_cases)} test cases from {json_file}")
+        return test_cases
+        
+    except FileNotFoundError:
+        print(f"❌ Test case file not found: {json_file}")
+        print("   Please ensure the JSON file exists. No fallback available.")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"❌ Invalid JSON in test case file: {e}")
+        print("   Please fix the JSON syntax. No fallback available.")
+        sys.exit(1)
 
 def load_prompt_from_typescript():
     """Load the shared prompt from TypeScript file"""
@@ -486,7 +348,7 @@ class IntentEvaluator:
     
     def run_full_evaluation(self, temperature: float = 0.1, dataset_filter: str = None, verbose: bool = True) -> List[EvalResult]:
         """Run evaluation on all or filtered test cases"""
-        test_cases = COMPREHENSIVE_TEST_CASES
+        test_cases = load_test_cases_from_json()
         
         if dataset_filter:
             test_cases = [tc for tc in test_cases if dataset_filter in tc.category]
