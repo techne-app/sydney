@@ -33,12 +33,10 @@ except ImportError:
         return iterable
 
 try:
-    from mlc_llm import MLCEngine
+    from model_wrapper import MLCModelWrapper
     MLC_AVAILABLE = True
 except ImportError:
-    print("⚠️  MLC LLM not installed. Install with:")
-    print("   uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly")
-    print("   uv pip install --pre -f https://mlc.ai/wheels mlc-ai-nightly")
+    print("⚠️  model_wrapper.py not found or MLC LLM not installed")
     MLC_AVAILABLE = False
 
 @dataclass
@@ -171,132 +169,42 @@ JSON Response:"""
 
 class IntentEvaluator:
     def __init__(self, model_name: str = None):
-        self.engine = None
-        self.model_path = None
+        if not MLC_AVAILABLE:
+            raise ImportError("MLC LLM not available")
+            
         self.model_name = model_name or DEFAULT_MODELS[0]
+        self.model_wrapper = MLCModelWrapper(self.model_name)
         self.prompt_template = load_prompt_from_typescript()
         self.results: List[EvalResult] = []
         self.total_eval_time = 0.0
-        self.model_size_mb = 0.0
-        self.find_model_path()
-        self.calculate_model_size()
     
-    def find_model_path(self):
-        """Find the local model path"""
-        current_dir = Path.cwd()
-        model_dir = current_dir / "models" / self.model_name
-        
-        if model_dir.exists():
-            self.model_path = str(model_dir)
-            return
-            
-        script_dir = Path(__file__).parent
-        if script_dir.name == "mlc_llm":
-            repo_root = script_dir.parent
-            model_dir = repo_root / "models" / self.model_name
-            
-            if model_dir.exists():
-                self.model_path = str(model_dir)
-                return
-        
-        print(f"❌ Model not found. Make sure models/{self.model_name} exists.")
-        sys.exit(1)
-    
-    def calculate_model_size(self):
-        """Calculate total model size in MB"""
-        if not self.model_path:
-            return
-            
-        try:
-            total_size = 0
-            model_dir = Path(self.model_path)
-            
-            # Sum up all .bin files (model weights)
-            for bin_file in model_dir.glob('*.bin'):
-                total_size += bin_file.stat().st_size
-            
-            # Also include tokenizer and config files
-            for other_file in model_dir.glob('*.json'):
-                total_size += other_file.stat().st_size
-            
-            # Convert to MB
-            self.model_size_mb = total_size / (1024 * 1024)
-            
-        except Exception as e:
-            print(f"⚠️  Could not calculate model size: {e}")
-            self.model_size_mb = 0.0
-    
-    def init_engine(self):
-        """Initialize the MLC engine"""
-        if not MLC_AVAILABLE:
-            print("❌ MLC LLM not available")
-            return False
-            
-        if self.engine is None:
-            print("🚀 Initializing MLC Engine...")
-            try:
-                self.engine = MLCEngine(self.model_path)
-                print("✅ Engine initialized successfully")
-                return True
-            except Exception as e:
-                print(f"❌ Failed to initialize engine: {e}")
-                return False
-        return True
-    
-    def call_model(self, prompt: str, temperature: float = 0.1) -> Optional[str]:
-        """Call the model with the given prompt"""
-        if not self.init_engine():
-            return None
-            
-        try:
-            response = self.engine.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=500,  # Increased for reasoning models
-                stream=False
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            print(f"❌ Model call failed: {e}")
-            return None
+    @property
+    def model_size_mb(self) -> float:
+        """Get model size from wrapper"""
+        return self.model_wrapper.model_size_mb
     
     def parse_response(self, response: str) -> Dict:
-        """Parse JSON response from model"""
-        if not response:
-            return {"error": "No response from model"}
-            
-        try:
-            # Handle reasoning models with <think> tags
-            cleaned_response = response
-            if '<think>' in response:
-                # Remove thinking blocks
-                cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-            
-            # Extract JSON from response - improved regex for nested structures
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_response)
-            if not json_match:
-                # Fallback: try to find any JSON-like structure
-                json_match = re.search(r'\{.*?\}', cleaned_response, flags=re.DOTALL)
-                if not json_match:
-                    return {"error": "No JSON found in response", "raw": response}
-            
-            json_text = json_match.group().strip()
-            parsed = json.loads(json_text)
-            
-            if "isSearch" not in parsed or not isinstance(parsed["isSearch"], bool):
-                return {"error": "Invalid isSearch field", "raw": response}
-            
-            if "confidence" not in parsed or not (0 <= parsed["confidence"] <= 1):
-                return {"error": "Invalid confidence field", "raw": response}
-            
-            # Convert to standard format
-            parsed["intentCategory"] = "action" if parsed["isSearch"] else "chat"
+        """Parse JSON response from model using wrapper's parser"""
+        parsed = self.model_wrapper.parse_json_response(response)
+        
+        if "error" in parsed:
             return parsed
             
-        except json.JSONDecodeError as e:
-            return {"error": f"JSON parse error: {e}", "raw": response}
-        except Exception as e:
-            return {"error": f"Parse error: {e}", "raw": response}
+        # Validate intent detection specific fields
+        if "isSearch" not in parsed or not isinstance(parsed["isSearch"], bool):
+            return {"error": "Invalid isSearch field", "raw": response}
+        
+        if "confidence" not in parsed or not (0 <= parsed["confidence"] <= 1):
+            return {"error": "Invalid confidence field", "raw": response}
+        
+        # Convert to standard format
+        parsed["intentCategory"] = "action" if parsed["isSearch"] else "chat"
+        return parsed
+    
+    def cleanup(self):
+        """Clean up model resources"""
+        if self.model_wrapper:
+            self.model_wrapper.cleanup()
     
     def evaluate_test_case(self, test_case: TestCase, temperature: float = 0.1, verbose: bool = True) -> Optional[EvalResult]:
         """Evaluate a single test case"""
@@ -307,7 +215,7 @@ class IntentEvaluator:
         prompt = self.prompt_template.replace('{message}', test_case.query)
         
         # Call model
-        response = self.call_model(prompt, temperature)
+        response = self.model_wrapper.call_model(prompt, temperature, max_tokens=500)
         if not response:
             return None
         
@@ -626,6 +534,7 @@ def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, ve
             print(f"   Avg Response: {model_metric.avg_response_time:.3f}s")
             
             # Clean up memory
+            evaluator.cleanup()
             del evaluator
             import gc
             gc.collect()
@@ -713,6 +622,7 @@ def compare_models(model_a: str, model_b: str, temperature: float = 0.1, dataset
     metrics_a = evaluator_a.calculate_metrics(results_a)
     
     # 🧹 Clean up model A from memory
+    evaluator_a.cleanup()
     del evaluator_a
     import gc
     gc.collect()
@@ -726,6 +636,7 @@ def compare_models(model_a: str, model_b: str, temperature: float = 0.1, dataset
     metrics_b = evaluator_b.calculate_metrics(results_b)
     
     # 🧹 Clean up model B from memory
+    evaluator_b.cleanup()
     del evaluator_b
     gc.collect()
     print(f"✅ Model B evaluation complete, memory freed")

@@ -90,39 +90,39 @@ python mlc_llm/eval_intent_detection.py --verbose
 
 | Model | Size (MB) | Accuracy | Precision | Recall | F1 Score | Production Ready | 
 |-------|-----------|----------|-----------|--------|----------|------------------|
-| 🥇 **Llama-3.2-3B-Instruct** | 1,733 | **88.9%** | **88.5%** | **93.9%** | **0.911** | ✅ **EXCELLENT** |
-| 🥈 **Phi-3.5-mini-instruct** | 2,052 | **87.0%** | **93.2%** | **84.1%** | **0.885** | ✅ **EXCELLENT** |
+| 🥇 **Phi-3.5-mini-instruct** | 2,052 | **87.7%** | **94.5%** | **84.1%** | **0.890** | ✅ **EXCELLENT** |
+| 🥈 **Llama-3.2-3B-Instruct** | 1,733 | **85.9%** | **87.1%** | **90.2%** | **0.886** | ✅ **EXCELLENT** |
 | 🥉 **Gemma-2-2B-it** | 1,420 | **76.1%** | **73.3%** | **93.9%** | **0.824** | ⚠️ **ACCEPTABLE** |
 
 ### Multi-Run Accuracy Analysis 📊
-**Accuracy across three evaluation runs (138 test cases each):**
+**Accuracy across four evaluation runs (138 test cases each):**
 
-| Model | Run 1 | Run 2 | Run 3 | Mean | Std Dev |
-|-------|-------|-------|-------|------|---------|
-| **Llama-3.2-3B-Instruct** | 85.9% | 87.4% | 88.9% | **87.4%** | **±1.5%** |
-| **Phi-3.5-mini-instruct** | 85.9% | 87.0% | 87.0% | **86.6%** | **±0.6%** |
-| **Gemma-2-2B-it** | 76.1% | 76.1% | 76.1% | **76.1%** | **±0.0%** |
+| Model | Run 1 | Run 2 | Run 3 | Run 4 | Mean | Std Dev |
+|-------|-------|-------|-------|-------|------|---------|
+| **Phi-3.5-mini-instruct** | 85.9% | 87.0% | 87.0% | **87.7%** | **86.9%** | **±0.8%** |
+| **Llama-3.2-3B-Instruct** | 85.9% | 87.4% | 88.9% | **85.9%** | **87.0%** | **±1.3%** |
+| **Gemma-2-2B-it** | 76.1% | 76.1% | 76.1% | **76.1%** | **76.1%** | **±0.0%** |
 
 ### Real Evaluation Results Summary
 - **Test Dataset**: 138 comprehensive test cases from `intent_detection_testcases.json`
 - **Evaluation Platform**: MacBook Pro M3 with Metal GPU acceleration  
 - **Temperature**: 0.1 for consistent, low-variance responses
-- **Key Insight**: Llama leads in overall accuracy (88.9%) and F1 score (0.911), Phi has highest precision (93.2%)
+- **Key Insight**: Phi leads in latest accuracy (87.7%) and highest precision (94.5%), but Llama shows higher variance
 
 ### Key Findings
 
-#### 🏆 Llama-3.2-3B-Instruct (RECOMMENDED)
-- **Highest accuracy** at 88.9% with consistent improvement across runs
-- **Best F1 score** at 0.911 showing excellent precision/recall balance  
-- **Strong recall** at 93.9% - catches more search intents with fewer false negatives
-- **Moderate size** at 1.7GB - good balance of performance and efficiency
-- **Production ready** with robust JSON parsing and error handling
-
-#### ✅ Phi-3.5-mini-instruct (ALTERNATIVE)
-- **Highest precision** at 93.2% - makes fewer false positive errors
-- **Very consistent** performance across runs (±0.6% variance)
-- **Larger model** at 2.0GB but more precise classifications
+#### 🏆 Phi-3.5-mini-instruct (RECOMMENDED)
+- **Highest current accuracy** at 87.7% in latest run
+- **Exceptional precision** at 94.5% - makes very few false positive errors
+- **Most consistent** performance across runs (±0.8% variance)
+- **Larger model** at 2.0GB but excellent precision/recall balance
 - **Best for applications** where false positives (classifying chat as search) are costly
+
+#### ✅ Llama-3.2-3B-Instruct (ALTERNATIVE)
+- **Higher variance** across runs (±1.3%) - less predictable performance
+- **Good recall** at 90.2% - catches more search intents 
+- **Smaller model** at 1.7GB - good balance of performance and efficiency
+- **Showed peak performance** of 88.9% in Run 3, but dropped back to 85.9% in Run 4
 
 #### ⚠️ Technical Issues Discovered
 
