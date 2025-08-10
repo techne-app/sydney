@@ -13,6 +13,7 @@ from collections import defaultdict, Counter
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 import statistics
+import math
 
 from tqdm import tqdm
 from model_wrapper import MLCModelWrapper
@@ -31,6 +32,31 @@ class EvalResult:
     difficulty: str
     notes: str
     model_name: str = ""
+
+@dataclass
+class AggregatedEvalResult:
+    """Aggregated results across multiple iterations per test case"""
+    question: str
+    intent_expected: str
+    category: str
+    difficulty: str
+    notes: str
+    model_name: str
+    
+    # Aggregated metrics
+    iterations: int
+    accuracy: float  # Percentage of correct predictions across iterations
+    mean_confidence: float
+    confidence_std: float
+    mean_confidence_correct: float  # Mean confidence when prediction was correct
+    mean_confidence_incorrect: float  # Mean confidence when prediction was wrong
+    
+    # Most common prediction (mode)
+    most_common_prediction: str
+    prediction_consistency: float  # Percentage of iterations with most common prediction
+    
+    # Raw iteration data
+    individual_results: List[EvalResult]
 
 def load_prompt_from_typescript():
     """Load the shared prompt from TypeScript file"""
@@ -91,6 +117,75 @@ class IntentEvaluator:
         if self.model_wrapper:
             self.model_wrapper.cleanup()
     
+    def evaluate_test_case_multi_iteration(self, test_case: TestCase, iterations: int = 10, temperature: float = 0.1, verbose: bool = True) -> Optional[AggregatedEvalResult]:
+        """Evaluate a single test case multiple times and aggregate results"""
+        if verbose:
+            print(f"\n🧪 Testing: \"{test_case.question}\" ({test_case.category}, {test_case.difficulty}) - {iterations} iterations")
+        
+        individual_results = []
+        
+        # Run multiple iterations
+        for iteration in range(iterations):
+            if verbose and iterations > 1:
+                print(f"   Iteration {iteration + 1}/{iterations}", end="... ")
+            
+            result = self.evaluate_test_case(test_case, temperature, verbose=False)
+            if result:
+                individual_results.append(result)
+            
+            if verbose and iterations > 1:
+                status = "✅" if result and result.correct else "❌"
+                print(f"{status} {result.predicted if result else 'ERROR'} ({result.confidence:.2f})" if result else "ERROR")
+        
+        if not individual_results:
+            return None
+        
+        # Calculate aggregated metrics
+        correct_count = sum(1 for r in individual_results if r.correct)
+        accuracy = correct_count / len(individual_results)
+        
+        confidences = [r.confidence for r in individual_results]
+        mean_confidence = statistics.mean(confidences)
+        confidence_std = statistics.stdev(confidences) if len(confidences) > 1 else 0.0
+        
+        correct_confidences = [r.confidence for r in individual_results if r.correct]
+        incorrect_confidences = [r.confidence for r in individual_results if not r.correct]
+        
+        mean_confidence_correct = statistics.mean(correct_confidences) if correct_confidences else 0.0
+        mean_confidence_incorrect = statistics.mean(incorrect_confidences) if incorrect_confidences else 0.0
+        
+        # Find most common prediction
+        predictions = [r.predicted for r in individual_results]
+        prediction_counts = Counter(predictions)
+        most_common_prediction = prediction_counts.most_common(1)[0][0]
+        prediction_consistency = prediction_counts[most_common_prediction] / len(predictions)
+        
+        aggregated_result = AggregatedEvalResult(
+            question=test_case.question,
+            intent_expected=test_case.intent_expected,
+            category=test_case.category,
+            difficulty=test_case.difficulty,
+            notes=test_case.notes,
+            model_name=self.model_name,
+            iterations=len(individual_results),
+            accuracy=accuracy,
+            mean_confidence=mean_confidence,
+            confidence_std=confidence_std,
+            mean_confidence_correct=mean_confidence_correct,
+            mean_confidence_incorrect=mean_confidence_incorrect,
+            most_common_prediction=most_common_prediction,
+            prediction_consistency=prediction_consistency,
+            individual_results=individual_results
+        )
+        
+        if verbose:
+            status = "✅ MOSTLY CORRECT" if accuracy >= 0.5 else "❌ MOSTLY WRONG"
+            print(f"   📊 Aggregated: {accuracy:.1%} accuracy, {prediction_consistency:.1%} consistency → {status}")
+            if accuracy < 1.0 and accuracy > 0.0:
+                print(f"   🎯 Most common: {most_common_prediction} ({prediction_consistency:.1%}), Expected: {test_case.intent_expected}")
+        
+        return aggregated_result
+    
     def evaluate_test_case(self, test_case: TestCase, temperature: float = 0.1, verbose: bool = True) -> Optional[EvalResult]:
         """Evaluate a single test case"""
         if verbose:
@@ -138,6 +233,41 @@ class IntentEvaluator:
                 print(f"   Reasoning: {result.reasoning}")
         
         return result
+    
+    def run_full_evaluation_with_iterations(self, iterations: int = 10, temperature: float = 0.1, dataset_filter: str = None, verbose: bool = True) -> List[AggregatedEvalResult]:
+        """Run evaluation with multiple iterations per test case"""
+        loader = TestCaseLoader("mlc_llm/bfcl_testcases.json")
+        
+        if dataset_filter:
+            test_cases = loader.get_cases_by_category(dataset_filter)
+            print(f"📊 Running {iterations}-iteration evaluation on {len(test_cases)} test cases (filter: {dataset_filter})")
+        else:
+            test_cases = loader.test_cases
+            print(f"📊 Running {iterations}-iteration evaluation on {len(test_cases)} test cases")
+        
+        print(f"🚀 Loading {self.model_name}...")
+        print(f"🔄 Each test case will be run {iterations} times for statistical analysis")
+        
+        results = []
+        total_iterations = len(test_cases) * iterations
+        completed_iterations = 0
+        
+        # Use tqdm for progress tracking
+        if not verbose:
+            iterator = tqdm(test_cases, desc=f"Evaluating {self.model_name} ({iterations}x)", unit="test")
+        else:
+            iterator = test_cases
+        
+        for i, test_case in enumerate(iterator, 1):
+            if verbose:
+                print(f"\nProgress: {i}/{len(test_cases)} (completed {completed_iterations}/{total_iterations} total iterations)")
+            
+            result = self.evaluate_test_case_multi_iteration(test_case, iterations, temperature, verbose)
+            if result:
+                results.append(result)
+                completed_iterations += result.iterations
+        
+        return results
     
     def run_full_evaluation(self, temperature: float = 0.1, dataset_filter: str = None, verbose: bool = True) -> List[EvalResult]:
         """Run evaluation on all or filtered test cases"""
@@ -258,6 +388,83 @@ class IntentEvaluator:
             stats["accuracy"] = stats["correct"] / stats["total"] if stats["total"] > 0 else 0
         
         return dict(difficulty_stats)
+    
+    def calculate_aggregated_metrics(self, aggregated_results: List[AggregatedEvalResult]) -> Dict:
+        """Calculate metrics from aggregated multi-iteration results"""
+        if not aggregated_results:
+            return {}
+        
+        # Overall accuracy (mean across all test cases)
+        overall_accuracy = statistics.mean([r.accuracy for r in aggregated_results])
+        accuracy_std = statistics.stdev([r.accuracy for r in aggregated_results]) if len(aggregated_results) > 1 else 0.0
+        
+        # Confidence metrics
+        mean_confidences = [r.mean_confidence for r in aggregated_results]
+        overall_mean_confidence = statistics.mean(mean_confidences)
+        
+        # Consistency metrics
+        consistency_scores = [r.prediction_consistency for r in aggregated_results]
+        mean_consistency = statistics.mean(consistency_scores)
+        consistency_std = statistics.stdev(consistency_scores) if len(consistency_scores) > 1 else 0.0
+        
+        # Count test cases by accuracy thresholds
+        perfect_cases = sum(1 for r in aggregated_results if r.accuracy == 1.0)
+        mostly_correct = sum(1 for r in aggregated_results if r.accuracy >= 0.5)
+        
+        # Calculate confidence intervals for overall accuracy
+        n = len(aggregated_results)
+        margin_of_error = 1.96 * (accuracy_std / math.sqrt(n)) if n > 1 else 0.0  # 95% CI
+        confidence_interval = (overall_accuracy - margin_of_error, overall_accuracy + margin_of_error)
+        
+        return {
+            "overall_accuracy": overall_accuracy,
+            "accuracy_std": accuracy_std,
+            "confidence_interval_95": confidence_interval,
+            "total_test_cases": len(aggregated_results),
+            "perfect_cases": perfect_cases,
+            "mostly_correct_cases": mostly_correct,
+            "mean_confidence": overall_mean_confidence,
+            "mean_consistency": mean_consistency,
+            "consistency_std": consistency_std,
+            "total_iterations": sum(r.iterations for r in aggregated_results)
+        }
+    
+    def print_aggregated_report(self, aggregated_results: List[AggregatedEvalResult]) -> None:
+        """Print comprehensive report for multi-iteration evaluation"""
+        if not aggregated_results:
+            print("❌ No results to report")
+            return
+        
+        metrics = self.calculate_aggregated_metrics(aggregated_results)
+        
+        print(f"\n📊 MULTI-ITERATION EVALUATION REPORT")
+        print("=" * 60)
+        
+        print(f"\n🎯 STATISTICAL PERFORMANCE:")
+        print(f"   Mean Accuracy: {metrics['overall_accuracy']:.1%} ± {metrics['accuracy_std']:.1%}")
+        ci_low, ci_high = metrics['confidence_interval_95']
+        print(f"   95% Confidence Interval: [{ci_low:.1%}, {ci_high:.1%}]")
+        print(f"   Perfect Cases: {metrics['perfect_cases']}/{metrics['total_test_cases']} ({metrics['perfect_cases']/metrics['total_test_cases']:.1%})")
+        print(f"   Mostly Correct (≥50%): {metrics['mostly_correct_cases']}/{metrics['total_test_cases']} ({metrics['mostly_correct_cases']/metrics['total_test_cases']:.1%})")
+        
+        print(f"\n🎲 CONSISTENCY ANALYSIS:")
+        print(f"   Mean Prediction Consistency: {metrics['mean_consistency']:.1%} ± {metrics['consistency_std']:.1%}")
+        print(f"   Total Iterations Completed: {metrics['total_iterations']:,}")
+        print(f"   Mean Confidence: {metrics['mean_confidence']:.3f}")
+        
+        # Show cases with low consistency (high variance)
+        print(f"\n📊 VARIANCE ANALYSIS:")
+        high_variance_cases = [r for r in aggregated_results if r.prediction_consistency < 0.8]
+        print(f"   Cases with <80% consistency: {len(high_variance_cases)}")
+        
+        if high_variance_cases:
+            print("   Top inconsistent cases:")
+            sorted_cases = sorted(high_variance_cases, key=lambda x: x.prediction_consistency)[:5]
+            for case in sorted_cases:
+                print(f"     \"{case.question[:60]}...\" - {case.prediction_consistency:.1%} consistency")
+                predictions = [r.predicted for r in case.individual_results]
+                pred_counts = Counter(predictions)
+                print(f"       Predictions: {dict(pred_counts)}")
     
     def analyze_failures(self, results: List[EvalResult] = None) -> None:
         """Analyze and report failure cases"""

@@ -20,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass, asdict
 from typing import List, Tuple
 
-from intent_evaluator import IntentEvaluator, EvalResult
+from intent_evaluator import IntentEvaluator, EvalResult, AggregatedEvalResult
 
 
 @dataclass
@@ -322,6 +322,7 @@ def main():
     parser.add_argument('--model', help=f'Model to use (default: {DEFAULT_MODELS[0]})')
     parser.add_argument('--compare', nargs=2, metavar=('MODEL_A', 'MODEL_B'), help='Compare two models side-by-side')
     parser.add_argument('--export-comparison', help='Export comparison results to file (.json)')
+    parser.add_argument('--iterations', type=int, default=10, help='Number of iterations per test case for statistical analysis (default: 10)')
     
     args = parser.parse_args()
     
@@ -395,7 +396,8 @@ def main():
         print(f"\nExamples:")
         print(f"  python mlc_llm/eval_intent_detection.py --eval-all")
         print(f"  python mlc_llm/eval_intent_detection.py --full-eval")
-        print(f"  python mlc_llm/eval_intent_detection.py --dataset ambiguous --temp 0.2")
+        print(f"  python mlc_llm/eval_intent_detection.py --full-eval --iterations 5  # 5 iterations per test case")
+        print(f"  python mlc_llm/eval_intent_detection.py --dataset ambiguous --temp 0.2 --iterations 20")
         print(f"  python mlc_llm/eval_intent_detection.py --full-eval --export-results results.json")
         print(f"  python mlc_llm/eval_intent_detection.py --compare {DEFAULT_MODELS[0]} {DEFAULT_MODELS[1]}")
         return
@@ -405,21 +407,73 @@ def main():
     
     try:
         if args.full_eval or args.dataset:
-            # Run evaluation
-            results = evaluator.run_full_evaluation(
-                temperature=args.temp,
-                dataset_filter=args.dataset,
-                verbose=not args.quiet
-            )
-            
-            # Print comprehensive report
-            evaluator.print_comprehensive_report(results)
-            
-            if args.analyze_failures:
-                evaluator.analyze_failures(results)
+            if args.iterations > 1:
+                # Run multi-iteration evaluation
+                aggregated_results = evaluator.run_full_evaluation_with_iterations(
+                    iterations=args.iterations,
+                    temperature=args.temp,
+                    dataset_filter=args.dataset,
+                    verbose=not args.quiet
+                )
                 
-            if args.export_results:
-                evaluator.export_results(args.export_results, results)
+                # Print aggregated report
+                evaluator.print_aggregated_report(aggregated_results)
+                
+                if args.analyze_failures:
+                    # Analyze failures from individual results
+                    all_individual_results = []
+                    for agg_result in aggregated_results:
+                        all_individual_results.extend(agg_result.individual_results)
+                    evaluator.analyze_failures(all_individual_results)
+                    
+                if args.export_results:
+                    # Export aggregated results
+                    export_data = {
+                        "metadata": {
+                            "evaluation_type": "multi_iteration",
+                            "iterations_per_case": args.iterations,
+                            "temperature": args.temp,
+                            "dataset_filter": args.dataset,
+                            "model_name": evaluator.model_name
+                        },
+                        "aggregated_metrics": evaluator.calculate_aggregated_metrics(aggregated_results),
+                        "results": [
+                            {
+                                "question": r.question,
+                                "intent_expected": r.intent_expected,
+                                "category": r.category,
+                                "difficulty": r.difficulty,
+                                "accuracy": r.accuracy,
+                                "mean_confidence": r.mean_confidence,
+                                "confidence_std": r.confidence_std,
+                                "most_common_prediction": r.most_common_prediction,
+                                "prediction_consistency": r.prediction_consistency,
+                                "iterations": r.iterations
+                            } for r in aggregated_results
+                        ]
+                    }
+                    
+                    filepath = Path(args.export_results)
+                    with open(filepath, 'w') as f:
+                        json.dump(export_data, f, indent=2)
+                    print(f"\n📄 Multi-iteration results exported to {filepath}")
+                    
+            else:
+                # Run single-iteration evaluation (original behavior)
+                results = evaluator.run_full_evaluation(
+                    temperature=args.temp,
+                    dataset_filter=args.dataset,
+                    verbose=not args.quiet
+                )
+                
+                # Print comprehensive report
+                evaluator.print_comprehensive_report(results)
+                
+                if args.analyze_failures:
+                    evaluator.analyze_failures(results)
+                    
+                if args.export_results:
+                    evaluator.export_results(args.export_results, results)
         
         elif args.analyze_failures:
             print("❌ No results to analyze. Run --full-eval first.")

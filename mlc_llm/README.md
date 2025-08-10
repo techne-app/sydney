@@ -295,19 +295,50 @@ The shared prompt (`src/prompts/searchIntent.ts`) includes:
 
 ## Prerequisites
 
-### Required Dependencies
-The evaluation scripts now require explicit dependencies (no fallbacks):
-
-- **tqdm**: Progress bar library
-- **MLC LLM**: Model inference engine
-- **TestCaseLoader**: BFCL format parser
+### UV Workflow Setup
+This project uses **uv** for Python environment and dependency management. The venv is created in the repo root so VSCode can auto-detect it.
 
 ```bash
-# Install required dependencies
-pip install tqdm
+# Create virtual environment (uses latest available Python)
+uv venv --python-preference only-managed
+
+# Or specify a specific Python version (uv will download if needed)
+uv venv --python 3.12
+
+# Install required MLC packages (both are required)
+# Option 1: Stable versions (CPU-only, recommended for stability)
+uv pip install --find-links https://mlc.ai/wheels mlc_llm_cpu==0.19.0 mlc_ai_cpu==0.19.0
+
+# Option 2: Nightly versions (bleeding edge, includes Metal GPU acceleration on Apple Silicon)
 uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly
 uv pip install --pre -f https://mlc.ai/wheels mlc-ai-nightly
+
+# Install additional dependencies
+uv pip install tqdm
+
+# Run scripts using uv (automatically uses the venv)
+uv run python mlc_llm/model_wrapper.py
+uv run python mlc_llm/eval_intent_detection.py --full-eval
+
+# Or activate venv manually if preferred
+source .venv/bin/activate  # Linux/macOS
+# .venv\Scripts\activate   # Windows
+python mlc_llm/model_wrapper.py
 ```
+
+### Required Dependencies
+The evaluation scripts require these packages:
+
+**Stable versions (CPU-only, recommended for stability):**
+- **mlc_llm_cpu==0.19.0**: Core MLC LLM inference engine (stable, CPU-only)
+- **mlc_ai_cpu==0.19.0**: Additional AI components (required with mlc-llm)
+
+**Nightly versions (bleeding edge, Metal GPU acceleration):**
+- **mlc-llm-nightly**: Core MLC LLM inference engine (latest features, includes Metal GPU support on Apple Silicon)
+- **mlc-ai-nightly**: Additional AI components (required with mlc-llm-nightly)
+
+**Additional dependencies:**
+- **tqdm**: Progress bar library
 
 ### Model Setup
 ```bash
