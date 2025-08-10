@@ -19,7 +19,7 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List
 
-from intent_evaluator import IntentEvaluator, AggregatedEvalResult
+from intent_evaluator import IntentEvaluator, EvalResult
 
 
 
@@ -27,11 +27,8 @@ from intent_evaluator import IntentEvaluator, AggregatedEvalResult
 class ModelMetrics:
     name: str
     accuracy: float
-    precision: float
-    recall: float
-    f1_score: float
     size_mb: float
-    avg_response_time: float
+    avg_inference_time: float  # Average time per inference
     total_eval_time: float
     total_test_cases: int
 
@@ -57,20 +54,17 @@ def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, ve
         
         try:
             evaluator = IntentEvaluator(model_name)
-            results = evaluator.run_full_evaluation(temperature, dataset_filter, verbose=verbose)
-            metrics = evaluator.calculate_metrics(results)
+            results = evaluator.run_evaluation(iterations=1, temperature=temperature, dataset_filter=dataset_filter, verbose=verbose)
+            metrics = evaluator.calculate_aggregated_metrics(results)
             
             # Create ModelMetrics object
             model_metric = ModelMetrics(
                 name=model_name,
-                accuracy=metrics.get('accuracy', 0),
-                precision=metrics.get('precision', 0),
-                recall=metrics.get('recall', 0),
-                f1_score=metrics.get('f1_score', 0),
+                accuracy=metrics.get('overall_accuracy', 0),
                 size_mb=evaluator.model_size_mb,
-                avg_response_time=metrics.get('performance_stats', {}).get('avg_response_time', 0),
+                avg_inference_time=metrics.get('mean_inference_time', 0),
                 total_eval_time=evaluator.total_eval_time,
-                total_test_cases=len(results)
+                total_test_cases=metrics.get('total_test_cases', 0)
             )
             
             model_metrics.append(model_metric)
@@ -109,8 +103,8 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
     sorted_metrics = sorted(model_metrics, key=lambda x: x.accuracy, reverse=True)
     
     # Table header
-    print(f"{'Model':<35} {'Size (MB)':<10} {'Accuracy':<10} {'Precision':<11} {'Recall':<8} {'F1':<6} {'Avg Time':<10} {'Status':<15}")
-    print("-" * 100)
+    print(f"{'Model':<35} {'Size (MB)':<10} {'Accuracy':<10} {'Avg Time':<10} {'Status':<15}")
+    print("-" * 90)
     
     # Table rows
     for i, metrics in enumerate(sorted_metrics):
@@ -133,29 +127,27 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
         elif i == 2:
             model_name = f"🥉 {model_name}"
         
-        print(f"{model_name:<35} {metrics.size_mb:<10.1f} {metrics.accuracy:<10.1%} "
-              f"{metrics.precision:<11.1%} {metrics.recall:<8.1%} {metrics.f1_score:<6.3f} "
-              f"{metrics.avg_response_time:<10.3f} {status:<15}")
+        print(f"{model_name:<35} {metrics.size_mb:<10.1f} {metrics.accuracy:<10.1%} {metrics.avg_inference_time:<10.3f} {status:<15}")
     
     # Summary statistics
     print("\n📈 SUMMARY STATISTICS:")
     accuracies = [m.accuracy for m in model_metrics]
     sizes = [m.size_mb for m in model_metrics]
-    times = [m.avg_response_time for m in model_metrics]
+    times = [m.avg_inference_time for m in model_metrics]
     
     print(f"   Best Accuracy: {max(accuracies):.1%} ({sorted_metrics[0].name.replace('-q4f16_1-MLC', '')})")
     print(f"   Smallest Model: {min(sizes):.1f} MB")
-    print(f"   Fastest Response: {min(times):.3f}s")
+    print(f"   Fastest Inference: {min(times):.3f}s")
     
     # Recommendations
     best_overall = sorted_metrics[0]
     smallest = min(model_metrics, key=lambda x: x.size_mb)
-    fastest = min(model_metrics, key=lambda x: x.avg_response_time)
+    fastest = min(model_metrics, key=lambda x: x.avg_inference_time)
     
     print(f"\n💡 RECOMMENDATIONS:")
     print(f"   🏆 Best Overall: {best_overall.name.replace('-q4f16_1-MLC', '')} ({best_overall.accuracy:.1%} accuracy)")
     print(f"   📱 Most Efficient: {smallest.name.replace('-q4f16_1-MLC', '')} ({smallest.size_mb:.1f} MB)")
-    print(f"   ⚡ Fastest: {fastest.name.replace('-q4f16_1-MLC', '')} ({fastest.avg_response_time:.3f}s avg)")
+    print(f"   ⚡ Fastest: {fastest.name.replace('-q4f16_1-MLC', '')} ({fastest.avg_inference_time:.3f}s avg)")
 
 
 
@@ -231,7 +223,7 @@ def main():
         if args.full_eval or args.dataset:
             if args.iterations > 1:
                 # Run multi-iteration evaluation
-                aggregated_results: List[AggregatedEvalResult] = evaluator.run_full_evaluation_with_iterations(
+                aggregated_results: List[EvalResult] = evaluator.run_evaluation(
                     iterations=args.iterations,
                     temperature=args.temp,
                     dataset_filter=args.dataset,
@@ -281,21 +273,55 @@ def main():
                     print(f"\n📄 Multi-iteration results exported to {filepath}")
                     
             else:
-                # Run single-iteration evaluation (original behavior)
-                results = evaluator.run_full_evaluation(
+                # Run single-iteration evaluation (iterations=1)
+                results: List[EvalResult] = evaluator.run_evaluation(
+                    iterations=1,
                     temperature=args.temp,
                     dataset_filter=args.dataset,
                     verbose=not args.quiet
                 )
                 
-                # Print comprehensive report
-                evaluator.print_comprehensive_report(results)
+                # Print aggregated report (handles single iterations gracefully)
+                evaluator.print_aggregated_report(results)
                 
                 if args.analyze_failures:
-                    evaluator.analyze_failures(results)
+                    # Analyze failures from individual results
+                    all_individual_results = []
+                    for agg_result in results:
+                        all_individual_results.extend(agg_result.individual_results)
+                    evaluator.analyze_failures(all_individual_results)
                     
                 if args.export_results:
-                    evaluator.export_results(args.export_results, results)
+                    # Export single-iteration results in same format
+                    export_data = {
+                        "metadata": {
+                            "evaluation_type": "single_iteration",
+                            "iterations_per_case": 1,
+                            "temperature": args.temp,
+                            "dataset_filter": args.dataset,
+                            "model_name": evaluator.model_name
+                        },
+                        "aggregated_metrics": evaluator.calculate_aggregated_metrics(results),
+                        "results": [
+                            {
+                                "question": r.question,
+                                "intent_expected": r.intent_expected,
+                                "category": r.category,
+                                "difficulty": r.difficulty,
+                                "accuracy": r.accuracy,
+                                "mean_confidence": r.mean_confidence,
+                                "confidence_std": r.confidence_std,
+                                "most_common_prediction": r.most_common_prediction,
+                                "prediction_consistency": r.prediction_consistency,
+                                "iterations": r.iterations
+                            } for r in results
+                        ]
+                    }
+                    
+                    filepath = Path(args.export_results)
+                    with open(filepath, 'w') as f:
+                        json.dump(export_data, f, indent=2)
+                    print(f"\n📄 Single-iteration results exported to {filepath}")
         
         elif args.analyze_failures:
             print("❌ No results to analyze. Run --full-eval first.")

@@ -1,7 +1,0 @@
-# MLC LLM for local model inference
-# NOTE: Install with special commands (not standard pip install -r requirements.txt):
-# uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly
-# uv pip install --pre -f https://mlc.ai/wheels mlc-ai-nightly
-
-mlc-llm-nightly
-mlc-ai-nightly
