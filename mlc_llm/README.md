@@ -23,22 +23,27 @@ This two-phase approach is **extensible and MCP-ready** - new functions can be a
 
 ## Scripts
 
-### `quick-intent-test.py`
-Interactive testing tool for individual queries or batch testing (legacy, single-phase).
+### `model_wrapper.py`
+Core model inference wrapper with built-in smoke testing functionality for quick validation before full evaluation.
 
 ```bash
+# Run default smoke test (4 basic queries)
+python mlc_llm/model_wrapper.py
+
+# Test specific model
+python mlc_llm/model_wrapper.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
+
 # Test a single query
-python mlc_llm/quick-intent-test.py "find AI discussions"
-
-# Test with specific model
-python mlc_llm/quick-intent-test.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC" "search for React"
-
-# Batch test all queries
-python mlc_llm/quick-intent-test.py --batch
+python mlc_llm/model_wrapper.py --query "find AI discussions"
 
 # Adjust temperature
-python mlc_llm/quick-intent-test.py --temp 0.3 "what about startups?"
+python mlc_llm/model_wrapper.py --temp 0.3 --query "search for startups"
+
+# Quiet mode (less verbose output)
+python mlc_llm/model_wrapper.py --quiet
 ```
+
+The smoke test validates basic model functionality by testing 4 representative queries (2 action, 2 chat) and verifies that the model loads correctly, produces valid JSON responses, and achieves reasonable accuracy on simple cases. It's designed as a quick sanity check before running full evaluations.
 
 ### `eval_intent_detection.py`
 Comprehensive evaluation framework using BFCL (Berkeley Function Calling Leaderboard) format natively.
@@ -355,7 +360,7 @@ stream: false           // Synchronous for intent detection
 
 ### Model Updates
 1. Download new model to `models/` directory
-2. Test with `quick-intent-test.py` for basic functionality
+2. Run smoke test with `python mlc_llm/model_wrapper.py --model <model-name>`
 3. Run full evaluation with `eval_intent_detection.py`
 4. Update configuration if performance improves
 
