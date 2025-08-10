@@ -12,14 +12,14 @@ Determines whether user messages are asking for **CONVERSATIONAL** responses or 
 - **chat**: User wants conversation, explanations, opinions, advice, or general discussion
 - **action**: User wants the system to perform an action - search, find, retrieve, create, analyze, etc.
 
-### Phase 2: Action Type Classification  
-For messages classified as "action", determines the specific action type:
+### Phase 2: Function Calling (Action Cases Only)
+For messages classified as "action", determines which specific function to call and extracts parameters:
 
-- **search**: Find, show, retrieve, discover HN content/discussions  
-- **create**: Generate, write, build something new (future)
-- **analyze**: Analyze trends, compare, synthesize information (future)
+- **get_thread_cards**: Find, show, retrieve, discover HN content/discussions using real backend API
+- **create_summary**: Generate summaries of discussion threads (future) 
+- **analyze_trends**: Analyze trends, compare, synthesize information (future)
 
-This two-phase approach is **extensible and MCP-ready** - new action types can be added without retraining Phase 1, and the architecture naturally maps to tool calling patterns for future MCP server integration.
+This two-phase approach is **extensible and MCP-ready** - new functions can be added without retraining Phase 1, and the architecture naturally maps to tool calling patterns for MCP server integration.
 
 ## Scripts
 
@@ -40,48 +40,25 @@ python mlc_llm/quick-intent-test.py --batch
 python mlc_llm/quick-intent-test.py --temp 0.3 "what about startups?"
 ```
 
-### `intent_evaluation_framework.py` 🆕
-**NEW**: Modular evaluation framework supporting two-phase classification with separate test case files.
-
-```bash
-# Phase 1 evaluation (chat vs action)
-python mlc_llm/intent_evaluation_framework.py --phase phase1 --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
-
-# Phase 2 evaluation (action type classification)  
-python mlc_llm/intent_evaluation_framework.py --phase phase2 --model "Llama-3.2-3B-Instruct-q4f16_1-MLC"
-
-# Evaluate both phases
-python mlc_llm/intent_evaluation_framework.py --phase both --models "Phi-3.5-mini-instruct-q4f16_1-MLC" "Llama-3.2-3B-Instruct-q4f16_1-MLC"
-
-# Filter by category or difficulty
-python mlc_llm/intent_evaluation_framework.py --phase phase1 --category-filter explicit_search --difficulty-filter hard
-
-# Compare multiple models across phases
-python mlc_llm/intent_evaluation_framework.py --models "Phi-3.5-mini-instruct-q4f16_1-MLC" "Llama-3.2-3B-Instruct-q4f16_1-MLC" --phase both
-
-# Export results to JSON
-python mlc_llm/intent_evaluation_framework.py --phase phase1 --export results_phase1.json
-```
-
-### `eval_intent_detection.py` (Legacy)
-Original comprehensive evaluation framework with embedded test cases.
+### `eval_intent_detection.py`
+Comprehensive evaluation framework using BFCL (Berkeley Function Calling Leaderboard) format natively.
 
 ```bash
 # Full evaluation with default model
-python mlc_llm/eval_intent_detection.py
+python mlc_llm/eval_intent_detection.py --full-eval
 
 # Compare two models
 python mlc_llm/eval_intent_detection.py --compare "Phi-3.5-mini-instruct-q4f16_1-MLC" "Llama-3.2-3B-Instruct-q4f16_1-MLC"
 
 # Test specific dataset categories
 python mlc_llm/eval_intent_detection.py --dataset explicit_search
-python mlc_llm/eval_intent_detection.py --dataset conversational
+python mlc_llm/eval_intent_detection.py --dataset ambiguous
 
 # Failure analysis
-python mlc_llm/eval_intent_detection.py --failures-only
+python mlc_llm/eval_intent_detection.py --analyze-failures
 
-# Verbose output with detailed results
-python mlc_llm/eval_intent_detection.py --verbose
+# Export results
+python mlc_llm/eval_intent_detection.py --export-results results.json
 ```
 
 ## Model Evaluation Results
@@ -90,95 +67,265 @@ python mlc_llm/eval_intent_detection.py --verbose
 
 | Model | Size (MB) | Accuracy | Precision | Recall | F1 Score | Production Ready | 
 |-------|-----------|----------|-----------|--------|----------|------------------|
-| 🥇 **Phi-3.5-mini-instruct** | 2,052 | **87.7%** | **94.5%** | **84.1%** | **0.890** | ✅ **EXCELLENT** |
-| 🥈 **Llama-3.2-3B-Instruct** | 1,733 | **85.9%** | **87.1%** | **90.2%** | **0.886** | ✅ **EXCELLENT** |
-| 🥉 **Gemma-2-2B-it** | 1,420 | **76.1%** | **73.3%** | **93.9%** | **0.824** | ⚠️ **ACCEPTABLE** |
+| 🥇 **Phi-3.5-mini-instruct** | 2,052 | **87.0%** | **93.2%** | **84.1%** | **0.885** | ✅ **EXCELLENT** |
+| 🥈 **Llama-3.2-3B-Instruct** | 1,733 | **85.8%** | **86.9%** | **90.1%** | **0.885** | ✅ **EXCELLENT** |
+| 🥉 **Gemma-2-2B-it** | 1,420 | **76.8%** | **74.0%** | **93.9%** | **0.828** | ⚠️ **ACCEPTABLE** |
 
 ### Multi-Run Accuracy Analysis 📊
-**Accuracy across four evaluation runs (138 test cases each):**
+**Accuracy across five evaluation runs (138 test cases each):**
 
-| Model | Run 1 | Run 2 | Run 3 | Run 4 | Mean | Std Dev |
-|-------|-------|-------|-------|-------|------|---------|
-| **Phi-3.5-mini-instruct** | 85.9% | 87.0% | 87.0% | **87.7%** | **86.9%** | **±0.8%** |
-| **Llama-3.2-3B-Instruct** | 85.9% | 87.4% | 88.9% | **85.9%** | **87.0%** | **±1.3%** |
-| **Gemma-2-2B-it** | 76.1% | 76.1% | 76.1% | **76.1%** | **76.1%** | **±0.0%** |
-
-### Real Evaluation Results Summary
-- **Test Dataset**: 138 comprehensive test cases from `intent_detection_testcases.json`
-- **Evaluation Platform**: MacBook Pro M3 with Metal GPU acceleration  
-- **Temperature**: 0.1 for consistent, low-variance responses
-- **Key Insight**: Phi leads in latest accuracy (87.7%) and highest precision (94.5%), but Llama shows higher variance
+| Model | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Mean | Std Dev |
+|-------|-------|-------|-------|-------|-------|------|---------|
+| **Phi-3.5-mini-instruct** | 85.9% | 87.0% | 87.0% | 87.7% | **87.0%** | **86.9%** | **±0.7%** |
+| **Llama-3.2-3B-Instruct** | 85.9% | 87.4% | 88.9% | 85.9% | **85.8%** | **86.8%** | **±1.2%** |
+| **Gemma-2-2B-it** | 76.1% | 76.1% | 76.1% | 76.1% | **76.8%** | **76.2%** | **±0.3%** |
 
 ### Key Findings
 
 #### 🏆 Phi-3.5-mini-instruct (RECOMMENDED)
-- **Highest current accuracy** at 87.7% in latest run
-- **Exceptional precision** at 94.5% - makes very few false positive errors
-- **Most consistent** performance across runs (±0.8% variance)
-- **Larger model** at 2.0GB but excellent precision/recall balance
+- **Consistent high accuracy** averaging 86.9% across 5 runs with latest at 87.0%
+- **Exceptional precision** at 93.2% - makes very few false positive errors
+- **Most consistent** performance across runs (±0.7% variance) - improved stability
 - **Best for applications** where false positives (classifying chat as search) are costly
 
 #### ✅ Llama-3.2-3B-Instruct (ALTERNATIVE)
-- **Higher variance** across runs (±1.3%) - less predictable performance
-- **Good recall** at 90.2% - catches more search intents 
+- **Stable performance** averaging 86.8% across 5 runs with latest at 85.8%
+- **Excellent recall** at 90.1% - catches more search intents 
 - **Smaller model** at 1.7GB - good balance of performance and efficiency
-- **Showed peak performance** of 88.9% in Run 3, but dropped back to 85.9% in Run 4
+- **Moderate variance** (±1.2%) - reasonably predictable performance
 
-#### ⚠️ Technical Issues Discovered
+## Test Dataset Structure (BFCL Format)
 
-**DeepSeek R1 JSON Parsing Problems:**
-- Generates `<think>` reasoning blocks that contaminate JSON output
-- **Fixed** with custom parsing logic in evaluation script
-- Requires increased `max_tokens` (200→500) for reasoning models
+The evaluation system now uses **BFCL (Berkeley Function Calling Leaderboard) compatible format** for comprehensive multi-phase evaluation:
 
-**Memory Management:**
-- **Sequential model loading** implemented to prevent OOM errors
-- Models properly cleaned up with `del` and `gc.collect()`
-- Avoid simultaneous model loading on resource-constrained systems
-
-## Test Dataset Structure
-
-The evaluation uses test cases from `intent_detection_testcases.json` with structured metadata:
+### Current Dataset: `bfcl_testcases.json`
 
 ```json
 {
   "metadata": {
-    "phase_1": "chat vs action (binary classification)",  
-    "phase_2": "action type classification (search, create, analyze, etc)",
-    "total_cases": 64,
-    "categories": ["explicit_search", "professional_search", "opinion_request", "ambiguous", ...],
-    "difficulty_levels": ["easy", "medium", "hard"]
+    "description": "Intent detection test cases using real get_thread_cards API for MCP evaluation",
+    "version": "1.0.0",
+    "format": "Berkeley Function Calling Leaderboard (BFCL) compatible",
+    "total_cases": 138,
+    "evaluation_phases": {
+      "intent_classification": "Phase 1: chat vs action (binary classification)",
+      "function_calling": "Phase 2: function selection and parameter extraction (action cases only)"
+    }
   },
-  "test_cases": [...]
+  "functions": {
+    "get_thread_cards": {
+      "name": "get_thread_cards",
+      "description": "Get filtered thread cards from Hacker News discussions",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "keyword_filter": {"type": "string", "description": "Text to filter discussions"},
+          "hours_back": {"type": "integer", "description": "Hours to look back", "default": 168},
+          "sort_by": {"type": "string", "enum": ["karma_density", "recent", "comment_count"]},
+          "num_cards": {"type": "integer", "description": "Number of cards to return"},
+          "density_min_comment_constant": {"type": "integer", "description": "Quality threshold"}
+        },
+        "required": ["keyword_filter"]
+      }
+    },
+    "no_action": {
+      "name": "no_action",
+      "description": "No action required - conversational response",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "response_type": {"type": "string", "enum": ["greeting", "opinion", "explanation", "social"]}
+        },
+        "required": ["response_type"]
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "id": "action_001",
+      "question": "find discussions about AI",
+      "category": "explicit_search",
+      "difficulty": "easy",
+      "intent_expected": "action",
+      "action_type_expected": "get_thread_cards",
+      "function": [...],
+      "expected_function_call": "get_thread_cards(keyword_filter='AI')",
+      "valid_alternatives": ["get_thread_cards(keyword_filter='artificial intelligence')"],
+      "evaluation_phases": ["intent_classification", "function_calling"]
+    }
+  ]
 }
 ```
 
-### Phase 1 Categories (Chat vs Action)
+### Key Improvements in BFCL Format
 
-**Action Intent Categories:**
-- **explicit_search**: Clear search commands ("find AI discussions")
-- **professional_search**: Job-focused searches ("salary threads for SF engineers")  
-- **entrepreneur_search**: Startup-focused searches ("YC founder stories")
-- **technical_search**: Tech-specific searches ("Rust performance benchmarks")
-- **ambiguous**: Context-dependent cases ("what about React?")
-- **single_word**: Minimal queries ("Docker", "React?")
+**1. Real Backend API Integration**
+- Uses actual `get_thread_cards` function from Azure Functions backend
+- Parameters match real API: `keyword_filter`, `hours_back`, `sort_by`, `num_cards`, `density_min_comment_constant`
+- Enables realistic MCP server evaluation
 
-**Chat Intent Categories:**
-- **opinion_request**: Asking for opinions ("what's your take on AI?")
-- **explanation_request**: Seeking explanations ("can you explain ML?")
-- **technical_explanation**: Deep technical understanding requests
-- **career_advice**: Professional guidance questions
-- **greeting**: Social interactions ("hello", "thanks")
+**2. Two-Phase Evaluation Support**
+- **Phase 1**: Intent classification (chat vs action) - evaluated on ALL test cases
+- **Phase 2**: Function calling with parameter extraction - evaluated on ACTION cases only
 
-### Phase 2 Categories (Action Types)
-Currently focused on **search** actions, with architecture ready for:
-- **create**: Generate/build content (future)
-- **analyze**: Trend analysis, comparisons (future)
+**3. Rich Parameter Extraction**
+- "recent AI discussions" → `get_thread_cards(keyword_filter="AI", hours_back=168, sort_by="recent")`
+- "highly upvoted ML posts" → `get_thread_cards(keyword_filter="ML", density_min_comment_constant=10)`
+- "find 5 startup threads" → `get_thread_cards(keyword_filter="startup", num_cards=5)`
 
-### Difficulty Distribution
-- **Easy**: 20% - Clear, unambiguous cases
-- **Medium**: 60% - Typical user patterns with some complexity  
-- **Hard**: 20% - Edge cases, ambiguous queries, minimal input
+## Expanding for Other Evaluation Types
+
+The BFCL format architecture is designed for extensibility. Here's how to add new evaluation types:
+
+### 1. Adding New Function Types
+
+Create new function schemas in the `functions` section:
+
+```json
+{
+  "functions": {
+    "analyze_trends": {
+      "name": "analyze_trends",
+      "description": "Analyze trends in HN discussions over time",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "topic": {"type": "string", "description": "Topic to analyze"},
+          "time_range": {"type": "string", "enum": ["week", "month", "quarter", "year"]},
+          "metric": {"type": "string", "enum": ["volume", "sentiment", "engagement"]}
+        },
+        "required": ["topic"]
+      }
+    },
+    "create_summary": {
+      "name": "create_summary",
+      "description": "Generate summaries of discussion threads",
+      "parameters": {
+        "type": "object", 
+        "properties": {
+          "thread_ids": {"type": "array", "items": {"type": "integer"}},
+          "format": {"type": "string", "enum": ["bullet_points", "paragraph", "timeline"]},
+          "max_length": {"type": "integer", "default": 500}
+        },
+        "required": ["thread_ids"]
+      }
+    }
+  }
+}
+```
+
+### 2. New Evaluation Phases
+
+Add specialized evaluation phases:
+
+```json
+{
+  "evaluation_phases": {
+    "intent_classification": "Phase 1: chat vs action (binary classification)",
+    "function_calling": "Phase 2: function selection and parameter extraction", 
+    "parameter_validation": "Phase 3: Parameter type and constraint checking (future)",
+    "semantic_equivalence": "Phase 4: Alternative parameter matching (future)"
+  }
+}
+```
+
+### 3. Domain-Specific Test Cases
+
+Create specialized test case categories:
+
+```json
+{
+  "test_cases": [
+    {
+      "id": "analyze_001",
+      "question": "show me how AI discussions evolved this quarter",
+      "category": "temporal_analysis",
+      "difficulty": "hard",
+      "intent_expected": "action",
+      "action_type_expected": "analyze_trends",
+      "expected_function_call": "analyze_trends(topic='AI', time_range='quarter', metric='volume')",
+      "evaluation_phases": ["intent_classification", "function_calling"]
+    }
+  ]
+}
+```
+
+### 4. Future Evaluation Framework Extensions
+
+**Multi-Modal Evaluation**
+- Image analysis requests
+- PDF document processing
+- Video content understanding
+
+**Conversational Context**
+- Multi-turn conversation evaluation
+- Context preservation across turns
+- Reference resolution ("find more like that")
+
+**MCP Server Integration**
+- Real backend MCP server calls
+- Tool orchestration evaluation
+- Multi-step reasoning assessment
+
+**Performance Benchmarks**
+- Latency under load
+- Memory usage profiling
+- Concurrent request handling
+
+## Usage in Extension
+
+### Intent Detection Flow
+1. User message received in chat interface
+2. Message sent to `IntentDetector.detectIntent()`
+3. Local LLM processes message with `SEARCH_INTENT_PROMPT`
+4. JSON response parsed for `isSearch`, `searchQuery`, `confidence`
+5. Router directs to search service or conversational AI
+
+### Prompt Engineering
+The shared prompt (`src/prompts/searchIntent.ts`) includes:
+- **Clear intent definitions** with examples
+- **Social interaction patterns** for chat classification  
+- **Ambiguous case handling** with confidence scores
+- **Structured JSON output** specification
+
+## Prerequisites
+
+### Required Dependencies
+The evaluation scripts now require explicit dependencies (no fallbacks):
+
+- **tqdm**: Progress bar library
+- **MLC LLM**: Model inference engine
+- **TestCaseLoader**: BFCL format parser
+
+```bash
+# Install required dependencies
+pip install tqdm
+uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly
+uv pip install --pre -f https://mlc.ai/wheels mlc-ai-nightly
+```
+
+### Model Setup
+```bash
+# Install git-lfs (required for model downloads)
+brew install git-lfs
+git lfs install
+
+cd models
+
+# Download recommended model
+git clone https://huggingface.co/mlc-ai/Phi-3.5-mini-instruct-q4f16_1-MLC
+
+# Download alternative model
+git clone https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC
+
+cd ..
+```
+
+### TypeScript Prompt Requirement
+The evaluation script requires the actual prompt from the TypeScript source:
+- Must have `src/prompts/searchIntent.ts` with `SEARCH_INTENT_PROMPT`
+- No fallback prompts - script exits if prompt cannot be loaded
+- Ensures evaluation uses identical prompt as production system
 
 ## Production Configuration
 
@@ -198,143 +345,26 @@ max_tokens: 500,         // Increased for reasoning models
 stream: false           // Synchronous for intent detection
 ```
 
-## Evaluation Metrics
-
-### Core Metrics
-- **Accuracy**: Overall correctness percentage
-- **Precision**: True positives / (True positives + False positives)
-- **Recall**: True positives / (True positives + False negatives)
-- **F1 Score**: Harmonic mean of precision and recall
-
-### Advanced Analysis
-- **Confusion Matrix**: Detailed breakdown of prediction vs actual
-- **Failure Analysis**: Specific cases where models fail
-- **JSON Reliability**: Parsing success rate for structured output
-- **Category Performance**: Accuracy across different intent types
-
-### Model Comparison Features
-- **Side-by-side evaluation** with disagreement analysis
-- **Statistical significance** testing
-- **Memory-efficient sequential loading**
-- **Progress tracking** with tqdm integration
-
-## Usage in Extension
-
-### Intent Detection Flow
-1. User message received in chat interface
-2. Message sent to `IntentDetector.detectIntent()`
-3. Local LLM processes message with `SEARCH_INTENT_PROMPT`
-4. JSON response parsed for `isSearch`, `searchQuery`, `confidence`
-5. Router directs to search service or conversational AI
-
-### Prompt Engineering
-The shared prompt (`src/prompts/searchIntent.ts`) includes:
-- **Clear intent definitions** with examples
-- **Social interaction patterns** for chat classification  
-- **Ambiguous case handling** with confidence scores
-- **Structured JSON output** specification
-
-### Error Handling
-- **Graceful degradation** on JSON parse failures
-- **Confidence thresholds** for uncertain classifications
-- **Fallback routing** to conversational AI when needed
-
-## Prerequisites
-
-### Model Setup
-- **git-lfs**: Required for downloading large model files
-- **Python 3.10+**: For running MLC LLM
-- **uv**: Modern Python package manager
-
-```bash
-# Install git-lfs (required for model downloads)
-brew install git-lfs
-git lfs install
-
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### Download MLC Models
-From the repo root, download complete MLC-compiled models:
-
-```bash
-cd models
-
-# Download recommended model
-git clone https://huggingface.co/mlc-ai/Phi-3.5-mini-instruct-q4f16_1-MLC
-
-# Download fallback model
-git clone https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC
-
-# Verify large files downloaded correctly (should be 100+ MB each)
-ls -lah */*.bin
-
-cd ..
-```
-
-### Python Environment Setup
-```bash
-cd mlc_llm
-
-# Create virtual environment with uv
-uv venv
-
-# Activate virtual environment
-source .venv/bin/activate  # On macOS/Linux
-# or .venv\Scripts\activate  # On Windows
-
-# Install MLC LLM (requires special wheel repository)
-uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly
-uv pip install --pre -f https://mlc.ai/wheels mlc-ai-nightly
-
-cd ..
-```
-
-## Quality Assurance
-
-### Pre-Production Checklist
-- [ ] Model accuracy ≥ 80% on evaluation dataset
-- [ ] JSON parsing reliability ≥ 95%
-- [ ] Memory usage within browser constraints
-- [ ] Latency ≤ 2 seconds for intent detection
-- [ ] No security vulnerabilities in model loading
-
-### Testing Procedures
-```bash
-# Run full evaluation
-python mlc_llm/eval_intent_detection.py --full-eval
-
-# Evaluate all models with performance metrics
-python mlc_llm/eval_intent_detection.py --eval-all
-
-# Test edge cases specifically  
-python mlc_llm/eval_intent_detection.py --dataset edge_cases
-
-# Export comprehensive results
-python mlc_llm/eval_intent_detection.py --eval-all --export-results model_comparison.json
-```
-
 ## Development Workflow
 
 ### Adding New Test Cases
-1. Edit test dataset in `eval_intent_detection.py`
-2. Run evaluation to establish baseline
-3. Update production model if needed
-4. Document changes in this README
+1. Edit `bfcl_testcases.json` directly
+2. Add to appropriate evaluation phases
+3. Run evaluation to establish baseline
+4. Update production model if needed
 
 ### Model Updates
 1. Download new model to `models/` directory
 2. Test with `quick-intent-test.py` for basic functionality
 3. Run full evaluation with `eval_intent_detection.py`
 4. Update configuration if performance improves
-5. Update documentation with new results
 
-### Prompt Improvements
-1. Edit `src/prompts/searchIntent.ts`
-2. Test changes with `quick-intent-test.py`
-3. Run full evaluation to measure impact
-4. Deploy if accuracy increases
+### Expanding Evaluation Framework
+1. Define new functions in BFCL format
+2. Create test cases with expected function calls
+3. Add evaluation phase support in testcase_loader
+4. Update evaluation script for new phases
+5. Run comprehensive evaluation
 
 ## Future Enhancements
 
@@ -349,52 +379,4 @@ python mlc_llm/eval_intent_detection.py --eval-all --export-results model_compar
 - **Tool orchestration** architecture for agentic search
 - **Multi-step reasoning** capabilities for complex queries
 - **Backend connectivity** for historical data access
-
-## Troubleshooting
-
-### Common Issues
-
-**Model Not Found**
-```bash
-❌ Model not found. Tried:
-   - /path/to/models/ModelName
-```
-- Ensure you're running from repo root directory
-- Check that `models/` directory exists with correct model folder
-
-**JSON Parse Errors**
-```bash
-❌ JSON parse error: Expecting property name enclosed in quotes
-```
-- Model may be generating malformed JSON
-- Try different temperature settings
-- Consider switching to a more reliable model
-
-**Memory Issues**
-```bash
-❌ Failed to initialize engine: Out of memory
-```
-- Use sequential model comparison instead of simultaneous
-- Close other applications to free memory
-- Consider smaller models for resource-constrained systems
-
-**Installation Problems**
-```bash
-❌ MLC LLM not installed
-```
-```bash
-uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly
-uv pip install --pre -f https://mlc.ai/wheels mlc-ai-nightly
-```
-
-### Debug Mode
-Enable verbose logging for detailed troubleshooting:
-```bash
-python mlc_llm/eval_intent_detection.py --verbose
-```
-
-This provides:
-- Raw model responses
-- JSON parsing attempts  
-- Detailed error messages
-- Performance timing data
+- **BFCL compatibility** for industry-standard evaluation

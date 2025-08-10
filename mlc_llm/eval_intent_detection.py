@@ -23,34 +23,14 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple, Optional
 import statistics
 
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-    # Fallback progress function
-    def tqdm(iterable, **kwargs):
-        return iterable
-
-try:
-    from model_wrapper import MLCModelWrapper
-    MLC_AVAILABLE = True
-except ImportError:
-    print("⚠️  model_wrapper.py not found or MLC LLM not installed")
-    MLC_AVAILABLE = False
-
-@dataclass
-class TestCase:
-    query: str
-    expected: str  # 'action' or 'chat'
-    category: str  # test category for analysis
-    difficulty: str  # 'easy', 'medium', 'hard'
-    notes: str = ""
+from tqdm import tqdm
+from model_wrapper import MLCModelWrapper
+from testcase_loader import TestCaseLoader, TestCase
 
 @dataclass
 class EvalResult:
-    query: str
-    expected: str
+    question: str
+    intent_expected: str
     predicted: str
     confidence: float
     reasoning: str
@@ -91,36 +71,6 @@ DEFAULT_MODELS = [
     "Llama-3.2-3B-Instruct-q4f16_1-MLC"
 ]
 
-def load_test_cases_from_json(json_file: str = "mlc_llm/intent_detection_testcases.json") -> List[TestCase]:
-    """Load test cases from JSON file"""
-    try:
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        
-        test_cases_data = data.get('test_cases', [])
-        
-        test_cases = [
-            TestCase(
-                query=case['query'],
-                expected=case['expected'], 
-                category=case['category'],
-                difficulty=case['difficulty'],
-                notes=case.get('notes', '')
-            )
-            for case in test_cases_data
-        ]
-        
-        print(f"✅ Loaded {len(test_cases)} test cases from {json_file}")
-        return test_cases
-        
-    except FileNotFoundError:
-        print(f"❌ Test case file not found: {json_file}")
-        print("   Please ensure the JSON file exists. No fallback available.")
-        sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f"❌ Invalid JSON in test case file: {e}")
-        print("   Please fix the JSON syntax. No fallback available.")
-        sys.exit(1)
 
 def load_prompt_from_typescript():
     """Load the shared prompt from TypeScript file"""
@@ -141,37 +91,12 @@ def load_prompt_from_typescript():
         
     except Exception as e:
         print(f"❌ Failed to load prompt from TypeScript: {e}")
-        # Fallback prompt
-        return """You are an intelligent assistant that determines if a user message is asking to search for something.
-
-Analyze this message and determine:
-1. Is the user asking to search for, find, or look up information?
-2. If yes, what specific search query should be extracted?
-3. How confident are you in this assessment?
-
-User message: "{message}"
-
-Respond with ONLY valid JSON in this exact format:
-{{
-  "isSearch": boolean,
-  "searchQuery": "extracted search terms or null",
-  "confidence": number between 0 and 1,
-  "reasoning": "brief explanation"
-}}
-
-Examples:
-- "find discussions about AI" → {{"isSearch": true, "searchQuery": "AI", "confidence": 0.9, "reasoning": "Clear search intent with specific topic"}}
-- "what about startups?" → {{"isSearch": true, "searchQuery": "startups", "confidence": 0.8, "reasoning": "Question about a topic implies search intent"}}
-- "hello how are you" → {{"isSearch": false, "searchQuery": null, "confidence": 0.9, "reasoning": "Greeting with no search intent"}}
-- "can you help me understand React" → {{"isSearch": false, "searchQuery": null, "confidence": 0.7, "reasoning": "Asking for explanation, not search"}}
-
-JSON Response:"""
+        print("❌ Cannot proceed without the actual prompt from searchIntent.ts")
+        print("❌ Please ensure src/prompts/searchIntent.ts exists and contains SEARCH_INTENT_PROMPT")
+        sys.exit(1)
 
 class IntentEvaluator:
     def __init__(self, model_name: str = None):
-        if not MLC_AVAILABLE:
-            raise ImportError("MLC LLM not available")
-            
         self.model_name = model_name or DEFAULT_MODELS[0]
         self.model_wrapper = MLCModelWrapper(self.model_name)
         self.prompt_template = load_prompt_from_typescript()
@@ -209,10 +134,10 @@ class IntentEvaluator:
     def evaluate_test_case(self, test_case: TestCase, temperature: float = 0.1, verbose: bool = True) -> Optional[EvalResult]:
         """Evaluate a single test case"""
         if verbose:
-            print(f"\n🧪 Testing: \"{test_case.query}\" ({test_case.category}, {test_case.difficulty})")
+            print(f"\n🧪 Testing: \"{test_case.question}\" ({test_case.category}, {test_case.difficulty})")
         
         # Build prompt
-        prompt = self.prompt_template.replace('{message}', test_case.query)
+        prompt = self.prompt_template.replace('{message}', test_case.question)
         
         # Call model
         response = self.model_wrapper.call_model(prompt, temperature, max_tokens=500)
@@ -229,11 +154,11 @@ class IntentEvaluator:
         
         # Create result
         predicted = parsed.get('intentCategory', 'ERROR')
-        correct = predicted == test_case.expected
+        correct = predicted == test_case.intent_expected
         
         result = EvalResult(
-            query=test_case.query,
-            expected=test_case.expected,
+            question=test_case.question,
+            intent_expected=test_case.intent_expected,
             predicted=predicted,
             confidence=parsed.get('confidence', 0.0),
             reasoning=parsed.get('reasoning', ''),
@@ -249,25 +174,26 @@ class IntentEvaluator:
             status = "✅ CORRECT" if correct else "❌ WRONG"
             print(f"   Predicted: {predicted} (confidence: {result.confidence:.2f}) → {status}")
             if not correct:
-                print(f"   Expected: {test_case.expected}")
+                print(f"   Expected: {test_case.intent_expected}")
                 print(f"   Reasoning: {result.reasoning}")
         
         return result
     
     def run_full_evaluation(self, temperature: float = 0.1, dataset_filter: str = None, verbose: bool = True) -> List[EvalResult]:
         """Run evaluation on all or filtered test cases"""
-        test_cases = load_test_cases_from_json()
+        loader = TestCaseLoader("mlc_llm/bfcl_testcases.json")
         
         if dataset_filter:
-            test_cases = [tc for tc in test_cases if dataset_filter in tc.category]
+            test_cases = loader.get_cases_by_category(dataset_filter)
             print(f"📊 Running evaluation on {len(test_cases)} test cases (filter: {dataset_filter})")
         else:
+            test_cases = loader.test_cases
             print(f"📊 Running full evaluation on {len(test_cases)} test cases")
         
         results = []
         
-        # Use tqdm if available, otherwise fallback to manual progress
-        if TQDM_AVAILABLE and not verbose:
+        # Use tqdm for progress tracking
+        if not verbose:
             iterator = tqdm(test_cases, desc=f"Evaluating {self.model_name}", unit="test")
         else:
             iterator = test_cases
@@ -275,10 +201,6 @@ class IntentEvaluator:
         for i, test_case in enumerate(iterator, 1):
             if verbose:
                 print(f"\nProgress: {i}/{len(test_cases)}")
-            elif not TQDM_AVAILABLE:
-                # Show progress even in quiet mode for comparisons when no tqdm
-                if i % 10 == 0 or i == len(test_cases):
-                    print(f"📊 Progress: {i}/{len(test_cases)} ({i/len(test_cases)*100:.0f}%)")
             
             result = self.evaluate_test_case(test_case, temperature, verbose)
             if result:
@@ -301,10 +223,10 @@ class IntentEvaluator:
         accuracy = correct / total if total > 0 else 0
         
         # Confusion matrix
-        true_positive = sum(1 for r in results if r.expected == "action" and r.predicted == "action")
-        false_positive = sum(1 for r in results if r.expected == "chat" and r.predicted == "action")
-        true_negative = sum(1 for r in results if r.expected == "chat" and r.predicted == "chat")
-        false_negative = sum(1 for r in results if r.expected == "action" and r.predicted == "chat")
+        true_positive = sum(1 for r in results if r.intent_expected == "action" and r.predicted == "action")
+        false_positive = sum(1 for r in results if r.intent_expected == "chat" and r.predicted == "action")
+        true_negative = sum(1 for r in results if r.intent_expected == "chat" and r.predicted == "chat")
+        false_negative = sum(1 for r in results if r.intent_expected == "action" and r.predicted == "chat")
         
         # Precision, Recall, F1 for "action" class
         precision = true_positive / (true_positive + false_positive) if (true_positive + false_positive) > 0 else 0
@@ -388,19 +310,19 @@ class IntentEvaluator:
         print("=" * 60)
         
         # Group failures by type
-        false_positives = [r for r in failures if r.expected == "chat" and r.predicted == "action"]
-        false_negatives = [r for r in failures if r.expected == "action" and r.predicted == "chat"]
+        false_positives = [r for r in failures if r.intent_expected == "chat" and r.predicted == "action"]
+        false_negatives = [r for r in failures if r.intent_expected == "action" and r.predicted == "chat"]
         
         print(f"\n❌ FALSE POSITIVES (classified as action, should be chat): {len(false_positives)}")
         for fp in false_positives[:10]:  # Show top 10
-            print(f"   \"{fp.query}\" → {fp.predicted} (conf: {fp.confidence:.2f})")
+            print(f"   \"{fp.question}\" → {fp.predicted} (conf: {fp.confidence:.2f})")
             print(f"      Reasoning: {fp.reasoning}")
             print(f"      Category: {fp.category}, Notes: {fp.notes}")
             print()
         
         print(f"\n❌ FALSE NEGATIVES (classified as chat, should be action): {len(false_negatives)}")
         for fn in false_negatives[:10]:  # Show top 10
-            print(f"   \"{fn.query}\" → {fn.predicted} (conf: {fn.confidence:.2f})")
+            print(f"   \"{fn.question}\" → {fn.predicted} (conf: {fn.confidence:.2f})")
             print(f"      Reasoning: {fn.reasoning}")
             print(f"      Category: {fn.category}, Notes: {fn.notes}")
             print()
@@ -489,9 +411,9 @@ class IntentEvaluator:
             # Export to CSV
             with open(filepath, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['query', 'expected', 'predicted', 'confidence', 'correct', 'category', 'difficulty', 'reasoning', 'notes', 'model'])
+                writer.writerow(['question', 'intent_expected', 'predicted', 'confidence', 'correct', 'category', 'difficulty', 'reasoning', 'notes', 'model'])
                 for r in results:
-                    writer.writerow([r.query, r.expected, r.predicted, r.confidence, r.correct, r.category, r.difficulty, r.reasoning, r.notes, r.model_name])
+                    writer.writerow([r.question, r.intent_expected, r.predicted, r.confidence, r.correct, r.category, r.difficulty, r.reasoning, r.notes, r.model_name])
             print(f"📄 Results exported to {filepath}")
         else:
             print(f"❌ Unsupported file format: {filepath.suffix}")
@@ -609,7 +531,7 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
     print(f"   📱 Most Efficient: {smallest.name.replace('-q4f16_1-MLC', '')} ({smallest.size_mb:.1f} MB)")
     print(f"   ⚡ Fastest: {fastest.name.replace('-q4f16_1-MLC', '')} ({fastest.avg_response_time:.3f}s avg)")
 
-def compare_models(model_a: str, model_b: str, temperature: float = 0.1, dataset_filter: str = None, verbose: bool = False) -> ModelComparison:
+def compare_models(model_a: str, model_b: str, temperature: float = 0.1, dataset_filter: str = None) -> ModelComparison:
     """Compare two models sequentially to avoid memory issues"""
     print(f"🔬 COMPARING MODELS: {model_a} vs {model_b}")
     print("=" * 60)
@@ -644,8 +566,8 @@ def compare_models(model_a: str, model_b: str, temperature: float = 0.1, dataset
     # Find disagreements
     disagreements = []
     for ra, rb in zip(results_a, results_b):
-        if ra.query == rb.query and ra.predicted != rb.predicted:
-            disagreements.append((ra.query, ra, rb))
+        if ra.question == rb.question and ra.predicted != rb.predicted:
+            disagreements.append((ra.question, ra, rb))
     
     comparison = ModelComparison(
         model_a=model_a,
@@ -679,7 +601,7 @@ def print_comparison_report(comparison: ModelComparison) -> None:
         print("   Top disagreements:")
         for i, (query, result_a, result_b) in enumerate(comparison.disagreements[:10]):
             print(f"\n   {i+1}. \"{query}\"")
-            print(f"      Expected: {result_a.expected}")
+            print(f"      Expected: {result_a.intent_expected}")
             print(f"      {comparison.model_a}: {result_a.predicted} (conf: {result_a.confidence:.2f})")
             print(f"      {comparison.model_b}: {result_b.predicted} (conf: {result_b.confidence:.2f})")
             
@@ -732,7 +654,7 @@ def export_comparison(comparison: ModelComparison, filename: str) -> None:
             "disagreements": [
                 {
                     "query": query,
-                    "expected": ra.expected,
+                    "intent_expected": ra.intent_expected,
                     "model_a_prediction": ra.predicted,
                     "model_a_confidence": ra.confidence,
                     "model_b_prediction": rb.predicted, 
