@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """
-Intent Detection Evaluation Framework
+Intent Detection Model Comparison Framework
 
-Comprehensive evaluation of intent detection models for chat vs search classification.
-Builds on quick-intent-test.py with extensive test cases and evaluation metrics.
+Always evaluates all models and compares their performance on intent detection tasks.
+Automatically saves results to mlc_llm/model_comparison.json for tracking progress.
 
 Usage:
-    python mlc_llm/eval_intent_detection.py --full-eval
-    python mlc_llm/eval_intent_detection.py --dataset ambiguous --temp 0.2
-    python mlc_llm/eval_intent_detection.py --analyze-failures
-    python mlc_llm/eval_intent_detection.py --export-results results.json
+    python mlc_llm/eval_intent_detection.py                                    # Full evaluation
+    python mlc_llm/eval_intent_detection.py --dataset pinned_thread_summary    # Test specific category  
+    python mlc_llm/eval_intent_detection.py --temp 0.2 --quiet                 # Adjust temperature, reduce output
+    python mlc_llm/eval_intent_detection.py --export-results custom.json       # Save to additional file
 """
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List
 
 from intent_evaluator import IntentEvaluator, EvalResult
 
-
+# Global output file path
+OUTPUT_JSON_PATH = "mlc_llm/model_comparison.json"
 
 @dataclass
 class ModelMetrics:
@@ -41,7 +41,108 @@ DEFAULT_MODELS = [
 ]
 
 
-def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, verbose: bool = False) -> List[ModelMetrics]:
+def extract_detailed_analysis(model_name: str, eval_results: List) -> dict:
+    """Extract detailed failure and success analysis from evaluation results"""
+    failures = []
+    successes = []
+    
+    for eval_result in eval_results:
+        # Check if this test case had any failures across iterations
+        if eval_result.accuracy < 1.0:  # Some iterations failed
+            # Get details from individual iterations
+            failed_iterations = [r for r in eval_result.individual_results if not r.correct]
+            
+            failure_info = {
+                "test_case_id": getattr(eval_result, 'id', f"unknown_{hash(eval_result.question) % 10000}"),
+                "question": eval_result.question,
+                "category": eval_result.category,
+                "difficulty": eval_result.difficulty,
+                "expected": eval_result.intent_expected,
+                "accuracy": eval_result.accuracy,
+                "iterations_total": eval_result.iterations,
+                "iterations_failed": len(failed_iterations),
+                "most_common_prediction": eval_result.most_common_prediction,
+                "prediction_consistency": eval_result.prediction_consistency,
+                "mean_confidence_when_wrong": eval_result.mean_confidence_incorrect if eval_result.mean_confidence_incorrect else 0,
+                "mean_confidence_when_right": eval_result.mean_confidence_correct if eval_result.mean_confidence_correct else 0,
+                "failure_examples": [
+                    {
+                        "predicted": f.predicted,
+                        "confidence": f.confidence,
+                        "reasoning": f.reasoning,
+                        "raw_response": f.raw_response
+                    } for f in failed_iterations
+                ],
+                "notes": eval_result.notes
+            }
+            failures.append(failure_info)
+        else:
+            # Perfect accuracy case - include all successful reasoning
+            successful_iterations = [r for r in eval_result.individual_results if r.correct]
+            
+            success_info = {
+                "test_case_id": getattr(eval_result, 'id', f"unknown_{hash(eval_result.question) % 10000}"),
+                "question": eval_result.question,
+                "category": eval_result.category,
+                "difficulty": eval_result.difficulty,
+                "expected": eval_result.intent_expected,
+                "mean_confidence": eval_result.mean_confidence,
+                "prediction_consistency": eval_result.prediction_consistency,
+                "success_examples": [
+                    {
+                        "predicted": s.predicted,
+                        "confidence": s.confidence,
+                        "reasoning": s.reasoning,
+                        "raw_response": s.raw_response
+                    } for s in successful_iterations
+                ],
+                "notes": eval_result.notes
+            }
+            successes.append(success_info)
+    
+    return {
+        "total_failures": len(failures),
+        "total_successes": len(successes),
+        "failure_rate_by_category": _calculate_failure_by_category(failures, successes),
+        "failure_rate_by_difficulty": _calculate_failure_by_difficulty(failures, successes),
+        "failed_cases": failures,
+        "successful_cases": successes
+    }
+
+
+def _calculate_failure_by_category(failures, successes):
+    """Calculate failure rates grouped by category"""
+    from collections import defaultdict
+    category_stats = defaultdict(lambda: {"total": 0, "failed": 0})
+    
+    for failure in failures:
+        category_stats[failure["category"]]["total"] += 1
+        category_stats[failure["category"]]["failed"] += 1
+    
+    for success in successes:
+        category_stats[success["category"]]["total"] += 1
+    
+    return {cat: {"failure_rate": stats["failed"] / stats["total"], **stats} 
+            for cat, stats in category_stats.items()}
+
+
+def _calculate_failure_by_difficulty(failures, successes):
+    """Calculate failure rates grouped by difficulty"""
+    from collections import defaultdict
+    difficulty_stats = defaultdict(lambda: {"total": 0, "failed": 0})
+    
+    for failure in failures:
+        difficulty_stats[failure["difficulty"]]["total"] += 1
+        difficulty_stats[failure["difficulty"]]["failed"] += 1
+    
+    for success in successes:
+        difficulty_stats[success["difficulty"]]["total"] += 1
+    
+    return {diff: {"failure_rate": stats["failed"] / stats["total"], **stats} 
+            for diff, stats in difficulty_stats.items()}
+
+
+def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, iterations: int = 10, verbose: bool = False) -> List[ModelMetrics]:
     """Evaluate all default models and return comprehensive metrics"""
     print(f"🚀 EVALUATING ALL MODELS: {', '.join(DEFAULT_MODELS)}")
     print("=" * 80)
@@ -54,7 +155,7 @@ def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, ve
         
         try:
             evaluator = IntentEvaluator(model_name)
-            results = evaluator.run_evaluation(iterations=1, temperature=temperature, dataset_filter=dataset_filter, verbose=verbose)
+            results = evaluator.run_evaluation(iterations=iterations, temperature=temperature, dataset_filter=dataset_filter, verbose=verbose)
             metrics = evaluator.calculate_aggregated_metrics(results)
             
             # Create ModelMetrics object
@@ -68,6 +169,11 @@ def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, ve
             )
             
             model_metrics.append(model_metric)
+            
+            # Store detailed results for failure analysis
+            if not hasattr(evaluate_all_models, '_detailed_results'):
+                evaluate_all_models._detailed_results = {}
+            evaluate_all_models._detailed_results[model_name] = results
             
             # Quick summary for this model
             print(f"✅ {model_name} complete:")
@@ -153,185 +259,77 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Comprehensive intent detection evaluation')
-    parser.add_argument('--eval-all', action='store_true', help='Evaluate all default models (Phi, Gemma, Llama)')
-    parser.add_argument('--dataset', help='Filter test cases by category (e.g., "ambiguous", "edge_case")')
+    parser = argparse.ArgumentParser(description='Comprehensive intent detection model comparison - always evaluates all models')
+    parser.add_argument('--dataset', help='Filter test cases by category (e.g., "pinned_thread_summary", "ambiguous")')
     parser.add_argument('--temp', type=float, default=0.1, help='Temperature (0.0-1.0)')
-    parser.add_argument('--analyze-failures', action='store_true', help='Show detailed failure analysis')
-    parser.add_argument('--export-results', help='Export results to file (.json or .csv)')
-    parser.add_argument('--quiet', action='store_true', help='Reduce output verbosity')
-    parser.add_argument('--model', help=f'Model to use (default: {DEFAULT_MODELS[0]})')
     parser.add_argument('--iterations', type=int, default=10, help='Number of iterations per test case for statistical analysis (default: 10)')
+    parser.add_argument('--export-results', help='Export results to additional custom file (.json)')
+    parser.add_argument('--quiet', action='store_true', help='Reduce output verbosity')
     
     args = parser.parse_args()
     
-    # Handle evaluation of all models
-    if args.eval_all:
-        try:
-            model_metrics = evaluate_all_models(
-                temperature=args.temp,
-                dataset_filter=args.dataset,
-                verbose=not args.quiet
-            )
-            
-            print_model_comparison_table(model_metrics)
-            
-            if args.export_results:
-                # Export comprehensive results
-                export_data = {
-                    "metadata": {
-                        "total_models": len(model_metrics),
-                        "test_cases": model_metrics[0].total_test_cases if model_metrics else 0,
-                        "temperature": args.temp,
-                        "dataset_filter": args.dataset
-                    },
-                    "models": [asdict(m) for m in model_metrics]
-                }
-                
-                filepath = Path(args.export_results)
-                with open(filepath, 'w') as f:
-                    json.dump(export_data, f, indent=2)
-                print(f"\n📄 Results exported to {filepath}")
-                
-        except KeyboardInterrupt:
-            print("\n👋 Interrupted by user")
-        except Exception as e:
-            print(f"❌ Error in eval-all: {e}")
-            import traceback
-            traceback.print_exc()
-            return 1
-        
-        return 0
-    
-    
-    # Single model evaluation
-    if not any([args.dataset, args.analyze_failures]):
-        parser.print_help()
-        print(f"\nExamples:")
-        print(f"  python mlc_llm/eval_intent_detection.py --eval-all")
-        print(f"  python mlc_llm/eval_intent_detection.py --dataset ambiguous --temp 0.2 --iterations 20")
-        print(f"  python mlc_llm/eval_intent_detection.py --eval-all --export-results results.json")
-        return
-    
-    model_name = args.model or DEFAULT_MODELS[0]
-    evaluator = IntentEvaluator(model_name)
-    
+    # Always evaluate all models (this is the only meaningful evaluation)
     try:
-        if args.dataset:
-            if args.iterations > 1:
-                # Run multi-iteration evaluation
-                aggregated_results: List[EvalResult] = evaluator.run_evaluation(
-                    iterations=args.iterations,
-                    temperature=args.temp,
-                    dataset_filter=args.dataset,
-                    verbose=not args.quiet
-                )
-                
-                # Print aggregated report
-                evaluator.print_aggregated_report(aggregated_results)
-                
-                if args.analyze_failures:
-                    # Analyze failures from individual results
-                    all_individual_results = []
-                    for agg_result in aggregated_results:
-                        all_individual_results.extend(agg_result.individual_results)
-                    evaluator.analyze_failures(all_individual_results)
-                    
-                if args.export_results:
-                    # Export aggregated results
-                    export_data = {
-                        "metadata": {
-                            "evaluation_type": "multi_iteration",
-                            "iterations_per_case": args.iterations,
-                            "temperature": args.temp,
-                            "dataset_filter": args.dataset,
-                            "model_name": evaluator.model_name
-                        },
-                        "aggregated_metrics": evaluator.calculate_aggregated_metrics(aggregated_results),
-                        "results": [
-                            {
-                                "question": r.question,
-                                "intent_expected": r.intent_expected,
-                                "category": r.category,
-                                "difficulty": r.difficulty,
-                                "accuracy": r.accuracy,
-                                "mean_confidence": r.mean_confidence,
-                                "confidence_std": r.confidence_std,
-                                "most_common_prediction": r.most_common_prediction,
-                                "prediction_consistency": r.prediction_consistency,
-                                "iterations": r.iterations
-                            } for r in aggregated_results
-                        ]
-                    }
-                    
-                    filepath = Path(args.export_results)
-                    with open(filepath, 'w') as f:
-                        json.dump(export_data, f, indent=2)
-                    print(f"\n📄 Multi-iteration results exported to {filepath}")
-                    
-            else:
-                # Run single-iteration evaluation (iterations=1)
-                results: List[EvalResult] = evaluator.run_evaluation(
-                    iterations=1,
-                    temperature=args.temp,
-                    dataset_filter=args.dataset,
-                    verbose=not args.quiet
-                )
-                
-                # Print aggregated report (handles single iterations gracefully)
-                evaluator.print_aggregated_report(results)
-                
-                if args.analyze_failures:
-                    # Analyze failures from individual results
-                    all_individual_results = []
-                    for agg_result in results:
-                        all_individual_results.extend(agg_result.individual_results)
-                    evaluator.analyze_failures(all_individual_results)
-                    
-                if args.export_results:
-                    # Export single-iteration results in same format
-                    export_data = {
-                        "metadata": {
-                            "evaluation_type": "single_iteration",
-                            "iterations_per_case": 1,
-                            "temperature": args.temp,
-                            "dataset_filter": args.dataset,
-                            "model_name": evaluator.model_name
-                        },
-                        "aggregated_metrics": evaluator.calculate_aggregated_metrics(results),
-                        "results": [
-                            {
-                                "question": r.question,
-                                "intent_expected": r.intent_expected,
-                                "category": r.category,
-                                "difficulty": r.difficulty,
-                                "accuracy": r.accuracy,
-                                "mean_confidence": r.mean_confidence,
-                                "confidence_std": r.confidence_std,
-                                "most_common_prediction": r.most_common_prediction,
-                                "prediction_consistency": r.prediction_consistency,
-                                "iterations": r.iterations
-                            } for r in results
-                        ]
-                    }
-                    
-                    filepath = Path(args.export_results)
-                    with open(filepath, 'w') as f:
-                        json.dump(export_data, f, indent=2)
-                    print(f"\n📄 Single-iteration results exported to {filepath}")
+        model_metrics = evaluate_all_models(
+            temperature=args.temp,
+            dataset_filter=args.dataset,
+            iterations=args.iterations,
+            verbose=not args.quiet
+        )
         
-        elif args.analyze_failures:
-            print("❌ No results to analyze. Run --full-eval first.")
+        print_model_comparison_table(model_metrics)
+        
+        # Always export comprehensive results to model_comparison.json
+        export_data = {
+            "metadata": {
+                "total_models": len(model_metrics),
+                "test_cases": model_metrics[0].total_test_cases if model_metrics else 0,
+                "temperature": args.temp,
+                "dataset_filter": args.dataset,
+                "iterations": args.iterations,
+                "evaluation_timestamp": __import__('datetime').datetime.now().isoformat()
+            },
+            "models": []
+        }
+        
+        # Add detailed analysis for each model
+        for model_metric in model_metrics:
+            model_data = asdict(model_metric)
+            
+            # Add detailed failure and success analysis if available
+            if hasattr(evaluate_all_models, '_detailed_results') and model_metric.name in evaluate_all_models._detailed_results:
+                detailed_analysis = extract_detailed_analysis(
+                    model_metric.name, 
+                    evaluate_all_models._detailed_results[model_metric.name]
+                )
+                model_data['detailed_analysis'] = detailed_analysis
+            
+            export_data["models"].append(model_data)
+        
+        # Always write to default location
+        default_filepath = Path(OUTPUT_JSON_PATH)
+        with open(default_filepath, 'w') as f:
+            json.dump(export_data, f, indent=2)
+        print(f"\n📄 Results automatically saved to {default_filepath}")
+        
+        # Also export to custom location if specified
+        if args.export_results:
+            custom_filepath = Path(args.export_results)
+            with open(custom_filepath, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            print(f"📄 Results also exported to {custom_filepath}")
             
     except KeyboardInterrupt:
         print("\n👋 Interrupted by user")
+        return 1
     except Exception as e:
-        print(f"❌ Error in main(): {e}")
+        print(f"❌ Error in evaluation: {e}")
         import traceback
         traceback.print_exc()
         return 1
     
     return 0
 
-if __name__ == "__main__":
-    sys.exit(main())
+
+if __name__ == '__main__':
+    exit(main())

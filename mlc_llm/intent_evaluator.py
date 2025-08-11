@@ -95,6 +95,58 @@ class IntentEvaluator:
         self.results: List[SingleEvalResult] = []
         self.total_eval_time = 0.0
     
+    def _build_context_aware_prompt(self, test_case: TestCase) -> str:
+        """Build prompt with optional pinned thread context"""
+        context_info = ''
+        
+        if test_case.context_pinned is True:
+            # Use realistic thread data from backend for testing
+            # Rotate through different realistic threads for variety
+            realistic_threads = [
+                {
+                    "title": "Mexico to US Livestock Trade halted due to Screwworm spread",
+                    "theme": "Screwworm Control Program Failure", 
+                    "category": "INDUSTRY ANALYSIS",
+                    "comments": 96,
+                    "summary": "Analysis of agricultural trade disruption due to screwworm outbreak affecting Mexico-US livestock commerce. Discussion covers economic impacts on ranchers, effectiveness of sterile insect technique programs, and regulatory responses. Contributors share insights on biosecurity measures, historical precedents of screwworm eradication efforts, and potential timeline for trade resumption."
+                },
+                {
+                    "title": "OpenSSH Post-Quantum Cryptography",
+                    "theme": "Post-Quantum Crypto Adoption Overhead",
+                    "category": "TECHNICAL DEEP DIVE", 
+                    "comments": 28,
+                    "summary": "Technical discussion about implementing post-quantum cryptography in OpenSSH. Thread examines performance implications, key size increases, and backward compatibility challenges. Engineers discuss NIST-approved algorithms, migration strategies, and real-world deployment considerations for quantum-resistant cryptographic systems."
+                },
+                {
+                    "title": "Google paid a $250K reward for a bug",
+                    "theme": "Bug bounty payouts comparison",
+                    "category": "MARKET SENTIMENT",
+                    "comments": 36,
+                    "summary": "Comparison of bug bounty programs across major tech companies examining payout structures and vulnerability valuations. Discussion includes analysis of Google's $250K reward in context of industry standards, factors affecting bounty amounts, and experiences from security researchers participating in various programs."
+                }
+            ]
+            
+            # Select thread based on test case ID for consistency
+            thread_index = hash(test_case.id) % len(realistic_threads)
+            thread = realistic_threads[thread_index]
+            
+            context_info = f'''Context: User has pinned this thread:
+- Title: "{thread["title"]}"
+- Theme: "{thread["theme"]}"
+- Category: "{thread["category"]}"
+- Comments: {thread["comments"]}
+- Summary: "{thread["summary"]}"
+
+'''
+        elif test_case.context_pinned is False:
+            # Explicitly no pinned thread
+            context_info = '''Context: No thread currently pinned.
+
+'''
+        # If context_pinned is None, no context is added (legacy behavior)
+        
+        return context_info + self.prompt_template.replace('{message}', test_case.question)
+    
     @property
     def model_size_mb(self) -> float:
         """Get model size from wrapper"""
@@ -204,8 +256,8 @@ class IntentEvaluator:
     
     def _evaluate_single_case(self, test_case: TestCase, temperature: float = 0.1) -> Optional[SingleEvalResult]:
         """Internal method to evaluate a single iteration of a test case"""
-        # Build prompt
-        prompt = self.prompt_template.replace('{message}', test_case.question)
+        # Build context-aware prompt
+        prompt = self._build_context_aware_prompt(test_case)
         
         # Call model and measure only the inference time
         response = self.model_wrapper.call_model(prompt, temperature, max_tokens=500)

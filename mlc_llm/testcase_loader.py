@@ -34,6 +34,9 @@ class TestCase:
     
     # Evaluation metadata
     evaluation_phases: Optional[List[str]] = None
+    
+    # Context-aware testing
+    context_pinned: Optional[bool] = None
 
 class TestCaseLoader:
     """Load and manage test cases for different evaluation phases"""
@@ -67,7 +70,8 @@ class TestCaseLoader:
                     function=case.get('function'),
                     expected_function_call=case.get('expected_function_call'),
                     valid_alternatives=case.get('valid_alternatives'),
-                    evaluation_phases=case.get('evaluation_phases', [])
+                    evaluation_phases=case.get('evaluation_phases', []),
+                    context_pinned=case.get('context_pinned')
                 )
                 for case in test_cases_data
             ]
