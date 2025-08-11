@@ -154,7 +154,6 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description='Comprehensive intent detection evaluation')
-    parser.add_argument('--full-eval', action='store_true', help='Run full evaluation on all test cases')
     parser.add_argument('--eval-all', action='store_true', help='Evaluate all default models (Phi, Gemma, Llama)')
     parser.add_argument('--dataset', help='Filter test cases by category (e.g., "ambiguous", "edge_case")')
     parser.add_argument('--temp', type=float, default=0.1, help='Temperature (0.0-1.0)')
@@ -206,21 +205,19 @@ def main():
     
     
     # Single model evaluation
-    if not any([args.full_eval, args.dataset, args.analyze_failures]):
+    if not any([args.dataset, args.analyze_failures]):
         parser.print_help()
         print(f"\nExamples:")
         print(f"  python mlc_llm/eval_intent_detection.py --eval-all")
-        print(f"  python mlc_llm/eval_intent_detection.py --full-eval")
-        print(f"  python mlc_llm/eval_intent_detection.py --full-eval --iterations 5  # 5 iterations per test case")
         print(f"  python mlc_llm/eval_intent_detection.py --dataset ambiguous --temp 0.2 --iterations 20")
-        print(f"  python mlc_llm/eval_intent_detection.py --full-eval --export-results results.json")
+        print(f"  python mlc_llm/eval_intent_detection.py --eval-all --export-results results.json")
         return
     
     model_name = args.model or DEFAULT_MODELS[0]
     evaluator = IntentEvaluator(model_name)
     
     try:
-        if args.full_eval or args.dataset:
+        if args.dataset:
             if args.iterations > 1:
                 # Run multi-iteration evaluation
                 aggregated_results: List[EvalResult] = evaluator.run_evaluation(
