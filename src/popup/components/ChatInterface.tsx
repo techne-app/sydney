@@ -950,7 +950,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               )}
               {!tempStatus && !isModelLoading && !error && (
                 <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  💬 Search Hacker News or start chatting
+                  💬 Chat, search, or pin a thread for context
                 </div>
               )}
             </div>
