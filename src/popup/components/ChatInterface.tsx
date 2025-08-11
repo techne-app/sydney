@@ -12,6 +12,7 @@ import { Modal } from './Modal';
 import { ActivityPage } from './ActivityPage';
 import { SettingsPage } from './SettingsPage';
 import { ThreadCard } from './ThreadCard';
+import { MessageCircle, ExternalLink } from 'lucide-react';
 
 // ThreadCard data interface
 interface ThreadCardData {
@@ -95,6 +96,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [contextThreads, setContextThreads] = useState<ThreadCardData[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [tempStatus, setTempStatus] = useState<string | null>(null);
+  const [pinnedCard, setPinnedCard] = useState<ThreadCardData | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -151,6 +153,40 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     loadContextThreads();
   }, []);
+
+  // Handle drag start from sidebar cards
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, cardData: ThreadCardData) => {
+    e.dataTransfer.setData('application/json', JSON.stringify(cardData));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+
+  // Handle drop in chat area
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    
+    try {
+      const cardData = JSON.parse(e.dataTransfer.getData('application/json')) as ThreadCardData;
+      setPinnedCard(cardData);
+    } catch (error) {
+      logger.error('Error handling drop:', error);
+    }
+  };
+
+  // Handle drag over
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  // Handle drag leave
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    // No visual feedback needed
+  };
+
+  // Remove pinned card
+  const removePinnedCard = () => {
+    setPinnedCard(null);
+  };
 
   // Handle search request with streaming - reuse existing assistant message
   const handleSearchRequest = async (searchQuery: string, assistantMessageId: string) => {
@@ -560,6 +596,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         fontSize: '11px'
                       }}
                       summary=""
+                      draggable={true}
+                      onDragStart={handleDragStart}
                     />
                   </div>
                 </div>
@@ -662,8 +700,80 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
         </div>
 
+        {/* Pinned Card Section */}
+        {pinnedCard && (
+          <div className="flex-shrink-0 px-4 py-2 border-b" style={{ borderColor: 'var(--hn-border)' }}>
+            <div className="relative group">
+              <button
+                onClick={removePinnedCard}
+                className="absolute top-2 right-2 z-10 w-4 h-4 rounded flex items-center justify-center text-white bg-[#ff6600] hover:bg-[#e55a00] transition-colors text-xs leading-none"
+                title="Remove context"
+              >
+                ×
+              </button>
+              <div 
+                className="compact-pinned-card"
+                style={{
+                  backgroundColor: '#f6f6ef',
+                  border: '2px solid var(--hn-blue)',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem',
+                  height: '70px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between'
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <span 
+                      className="text-[11px] tracking-wide uppercase font-semibold rounded px-2 py-1 text-white bg-[#ff6600]"
+                    >
+                      {pinnedCard.category}
+                    </span>
+                    <div className="flex flex-col flex-1 min-w-0">
+                      <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--primary)' }}>
+                        {pinnedCard.theme}
+                      </h2>
+                      <a
+                        href={pinnedCard.story_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-[#0066cc] hover:underline text-xs truncate"
+                        title={pinnedCard.story_title}
+                      >
+                        <span className="truncate">{pinnedCard.story_title}</span>
+                        <ExternalLink className="w-3 h-3 text-[#999] flex-shrink-0" />
+                      </a>
+                    </div>
+                  </div>
+                  <div className="flex-shrink-0 ml-2 mr-8">
+                    <a
+                      href={pinnedCard.anchor}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex flex-col items-start gap-0.5 text-[#0066cc] hover:underline text-xs font-mono leading-tight"
+                    >
+                      <div className="flex items-center gap-1">
+                        <MessageCircle className="w-3 h-3" />
+                        <span>Join the thread</span>
+                      </div>
+                      <span className="text-[#999] ml-4">{pinnedCard.comment_count} comments</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Chat Messages */}
-        <div className="flex-1 overflow-auto p-4 min-h-0">
+        <div 
+          className="flex-1 overflow-auto p-4 min-h-0"
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+        >
           <div className="flex flex-col justify-end min-h-full">
             <div className="flex-1"></div> {/* Spacer to push messages to bottom when few messages */}
             <div className="space-y-4">

@@ -27,6 +27,8 @@ interface ThreadCardProps extends ThreadCardData {
   className?: string;
   style?: React.CSSProperties;
   onClick?: () => void;
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>, data: ThreadCardData) => void;
 }
 
 // Simple local Card component
@@ -35,8 +37,16 @@ const Card: React.FC<{
   style?: React.CSSProperties; 
   children: React.ReactNode;
   onClick?: () => void;
-}> = ({ className = "", style = {}, children, onClick }) => (
-  <div className={className} style={style} onClick={onClick}>
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+}> = ({ className = "", style = {}, children, onClick, draggable = false, onDragStart }) => (
+  <div 
+    className={className} 
+    style={style} 
+    onClick={onClick}
+    draggable={draggable}
+    onDragStart={onDragStart}
+  >
     {children}
   </div>
 );
@@ -69,7 +79,10 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
   maxHeight,
   className = "",
   style = {},
-  onClick
+  onClick,
+  draggable = false,
+  onDragStart,
+  ...threadData
 }) => {
   // Track comment count changes for animation
   const [previousCount, setPreviousCount] = useState(comment_count);
@@ -142,12 +155,31 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
     });
   };
 
+  // Handle drag start
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+    if (onDragStart) {
+      const fullThreadData = {
+        ...threadData,
+        comment_count,
+        theme,
+        category,
+        story_title,
+        story_url,
+        anchor,
+        summary,
+        updated_at
+      };
+      onDragStart(e, fullThreadData);
+    }
+  };
+
   // Combine height-related styles - Match landing page exactly  
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#f6f6ef', // HN beige background like landing page
     height,
     minHeight,
     maxHeight,
+    cursor: draggable ? 'grab' : (onClick ? 'pointer' : 'default'),
     ...style
   };
 
@@ -155,9 +187,11 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
     <Card 
       className={`w-full h-full border border-[#e0e0e0] rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden ${
         isAnimating ? 'animate-subtle-glow' : ''
-      } ${onClick ? 'cursor-pointer' : ''} ${className}`}
+      } ${onClick ? 'cursor-pointer' : ''} ${draggable ? 'draggable-card' : ''} ${className}`}
       style={cardStyle}
       onClick={onClick}
+      draggable={draggable}
+      onDragStart={handleDragStart}
     >
       <div className={`p-4 ${height ? 'h-full' : ''} flex flex-col justify-between`}>
         <div className="flex-1 flex flex-col">

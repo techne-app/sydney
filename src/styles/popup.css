@@ -423,9 +423,87 @@ h1, h2, h3, h4, h5, h6 {
   scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.05);
 }
 
+/* Drag and Drop Styles */
+.draggable-card {
+  transition: all 0.2s ease;
+}
+
+.draggable-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  cursor: grab;
+}
+
+.draggable-card:active {
+  cursor: grabbing;
+  transform: scale(0.98);
+}
+
+/* Pinned card styles */
+.pinned-thread-card {
+  background-color: #f6f6ef !important;
+  border: 2px solid var(--hn-blue) !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15);
+}
+
+/* Compact pinned card in header */
+.compact-pinned-card {
+  transition: all 0.2s ease;
+}
+
+.compact-pinned-card:hover {
+  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.2);
+  transform: translateY(-1px);
+}
+
+/* Drop zone visual feedback */
+.drop-zone-active {
+  background: rgba(59, 130, 246, 0.08);
+  border: 2px dashed var(--hn-blue);
+  transition: all 0.2s ease;
+}
+
+/* Drag over animation */
+@keyframes dragOver {
+  0% { background-color: rgba(59, 130, 246, 0.05); }
+  50% { background-color: rgba(59, 130, 246, 0.1); }
+  100% { background-color: rgba(59, 130, 246, 0.05); }
+}
+
+.drag-over-animation {
+  animation: dragOver 1s ease-in-out infinite;
+}
+
+/* Line clamp utilities */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-7 {
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .animate-subtle-glow {
+    animation: none !important;
+  }
+  
+  .draggable-card:hover {
+    transform: none;
+  }
+  
+  .draggable-card:active {
+    transform: none;
+  }
+  
+  .drag-over-animation {
     animation: none !important;
   }
   
