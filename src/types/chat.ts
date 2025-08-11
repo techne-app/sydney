@@ -6,6 +6,21 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
+// ThreadCard data interface for pinned threads
+export interface ThreadCardData {
+  id: number;
+  cumulative_karma: number;
+  comment_count: number;
+  theme: string;
+  category: string;
+  story_id: number;
+  story_title: string;
+  story_url: string;
+  anchor: string;
+  summary: string;
+  updated_at: string;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -15,6 +30,7 @@ export interface Conversation {
   createdAt: Date;
   updatedAt: Date;
   isActive?: boolean;
+  pinnedThread?: ThreadCardData | null;
 }
 
 export interface ChatState {

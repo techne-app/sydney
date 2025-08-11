@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { type ChatCompletionMessageParam } from "@mlc-ai/web-llm";
-import { Conversation, ChatMessage, MODEL_OPTIONS } from '../../types/chat';
+import { Conversation, ChatMessage, MODEL_OPTIONS, ThreadCardData } from '../../types/chat';
 import { ConversationManager } from '../../utils/conversationUtils';
 import { webLLMClient } from '../../utils/webLLMClient';
 import { configStore } from '../../utils/configStore';
@@ -14,20 +14,6 @@ import { SettingsPage } from './SettingsPage';
 import { ThreadCard } from './ThreadCard';
 import { MessageCircle, ExternalLink } from 'lucide-react';
 
-// ThreadCard data interface
-interface ThreadCardData {
-  id: number;
-  cumulative_karma: number;
-  comment_count: number;
-  theme: string;
-  category: string;
-  story_id: number;
-  story_title: string;
-  story_url: string;
-  anchor: string;
-  summary: string;
-  updated_at: string;
-}
 
 // API configuration for fetching thread cards
 const API_BASE_URL = 'https://techne-pipeline-func-prod.azurewebsites.net/api';
@@ -99,6 +85,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [pinnedCard, setPinnedCard] = useState<ThreadCardData | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Load pinned thread when active conversation changes
+  useEffect(() => {
+    if (activeConversation?.pinnedThread) {
+      setPinnedCard(activeConversation.pinnedThread);
+    } else {
+      setPinnedCard(null);
+    }
+  }, [activeConversation]);
+
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -161,12 +156,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   // Handle drop in chat area
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     
     try {
       const cardData = JSON.parse(e.dataTransfer.getData('application/json')) as ThreadCardData;
       setPinnedCard(cardData);
+      
+      // Save to database if we have an active conversation
+      if (activeConversation) {
+        await ConversationManager.pinThreadToConversation(activeConversation.id, cardData);
+        // Update local conversation state
+        onConversationUpdated({
+          ...activeConversation,
+          pinnedThread: cardData,
+          updatedAt: new Date()
+        });
+      }
     } catch (error) {
       logger.error('Error handling drop:', error);
     }
@@ -184,8 +190,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   // Remove pinned card
-  const removePinnedCard = () => {
+  const removePinnedCard = async () => {
     setPinnedCard(null);
+    
+    // Remove from database if we have an active conversation
+    if (activeConversation) {
+      try {
+        await ConversationManager.unpinThreadFromConversation(activeConversation.id);
+        // Update local conversation state
+        onConversationUpdated({
+          ...activeConversation,
+          pinnedThread: null,
+          updatedAt: new Date()
+        });
+      } catch (error) {
+        logger.error('Error removing pinned thread:', error);
+      }
+    }
   };
 
   // Handle search request with streaming - reuse existing assistant message
@@ -269,7 +290,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const newTitle = ConversationManager.generateConversationTitle(userMessage);
         workingConversation = await ConversationManager.saveDraftConversation({
           ...activeConversation,
-          title: newTitle
+          title: newTitle,
+          pinnedThread: pinnedCard  // Preserve the pinned thread when saving draft
         });
         
         // Update the conversation in the UI

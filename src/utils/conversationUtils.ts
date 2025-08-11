@@ -1,5 +1,5 @@
 import { contextDb } from '../background/contextDb';
-import { Conversation, ChatMessage, MODEL_OPTIONS } from '../types/chat';
+import { Conversation, ChatMessage, MODEL_OPTIONS, ThreadCardData } from '../types/chat';
 
 export class ConversationManager {
   // Create a draft conversation that exists only in memory until first user message
@@ -138,6 +138,45 @@ export class ConversationManager {
     }
     
     return emptyConversations.length;
+  }
+
+  // Pinned thread methods
+  static async pinThreadToConversation(
+    conversationId: string, 
+    threadData: ThreadCardData
+  ): Promise<void> {
+    const conversation = await contextDb.getConversation(conversationId);
+    if (!conversation) {
+      throw new Error(`Conversation ${conversationId} not found`);
+    }
+
+    const updatedConversation = {
+      ...conversation,
+      pinnedThread: threadData,
+      updatedAt: new Date()
+    };
+
+    await contextDb.updateConversation(conversationId, updatedConversation);
+  }
+
+  static async unpinThreadFromConversation(conversationId: string): Promise<void> {
+    const conversation = await contextDb.getConversation(conversationId);
+    if (!conversation) {
+      throw new Error(`Conversation ${conversationId} not found`);
+    }
+
+    const updatedConversation = {
+      ...conversation,
+      pinnedThread: null,
+      updatedAt: new Date()
+    };
+
+    await contextDb.updateConversation(conversationId, updatedConversation);
+  }
+
+  static async getPinnedThread(conversationId: string): Promise<ThreadCardData | null> {
+    const conversation = await contextDb.getConversation(conversationId);
+    return conversation?.pinnedThread || null;
   }
 }
 
