@@ -76,23 +76,24 @@ const isPinnedThreadSummaryRequest = (
   return (hasSummaryKeyword && hasThreadKeyword) || reasoningMentionsPinned || reasoningMentionsSummary;
 };
 
-// Helper function to generate pinned thread summary response
+// Helper function to generate pinned thread summary response - returns only the summary text
 const generatePinnedThreadSummary = (pinnedCard: ThreadCardData | null): string => {
   if (!pinnedCard) {
     return "I don't see a pinned thread to summarize. Please drag a thread from the sidebar to pin it first, then ask me to summarize it.";
   }
   
-  return `## ${pinnedCard.theme}
-
-**Category**: ${pinnedCard.category}
-
-**Summary**: ${pinnedCard.summary}
-
-**Discussion**: ${pinnedCard.comment_count} comments on Hacker News
-
-**Original Story**: [${pinnedCard.story_title}](${pinnedCard.story_url})
-
-**Join Discussion**: [View thread](${pinnedCard.anchor})`;
+  // Debug logging
+  logger.debug('Pinned card data:', pinnedCard);
+  logger.debug('Summary field:', pinnedCard.summary);
+  logger.debug('Summary exists?', !!pinnedCard.summary);
+  logger.debug('Summary length:', pinnedCard.summary?.length || 0);
+  
+  // Return just the summary text if available, otherwise a helpful message
+  if (pinnedCard.summary && pinnedCard.summary.trim() !== '') {
+    return pinnedCard.summary;
+  }
+  
+  return "I couldn't find a summary for this thread. The discussion might be too recent or the summary hasn't been generated yet. You can view the full discussion using the 'Join the thread' link in the pinned card above.";
 };
 
 interface ChatInterfaceProps {
@@ -190,6 +191,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   // Handle drag start from sidebar cards
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, cardData: ThreadCardData) => {
+    logger.debug('Dragging card data:', cardData);
+    logger.debug('Card summary during drag:', cardData.summary);
     e.dataTransfer.setData('application/json', JSON.stringify(cardData));
     e.dataTransfer.effectAllowed = 'copy';
   };
@@ -417,6 +420,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // Check if this is a request to summarize pinned thread
             if (isPinnedThreadSummaryRequest(userMessage, intentResult, pinnedCard)) {
               logger.chat('Detected pinned thread summary request');
+              
               const summaryResponse = generatePinnedThreadSummary(pinnedCard);
               
               // Update the assistant message with the summary
@@ -511,6 +515,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               // Check if this is a request to summarize pinned thread
               if (isPinnedThreadSummaryRequest(userMessage, intentResult, pinnedCard)) {
                 logger.chat('Detected pinned thread summary request');
+                
                 const summaryResponse = generatePinnedThreadSummary(pinnedCard);
                 
                 // Update the assistant message with the summary
@@ -704,7 +709,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       }}
                       summary=""
                       draggable={true}
-                      onDragStart={handleDragStart}
+                      onDragStart={(e) => handleDragStart(e, thread)}
                     />
                   </div>
                 </div>

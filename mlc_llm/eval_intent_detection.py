@@ -42,71 +42,81 @@ DEFAULT_MODELS = [
 
 
 def extract_detailed_analysis(model_name: str, eval_results: List) -> dict:
-    """Extract detailed failure and success analysis from evaluation results"""
-    failures = []
-    successes = []
+    """Extract detailed failure and success analysis from evaluation results, grouped by iterations"""
+    test_cases_analysis = []
     
     for eval_result in eval_results:
-        # Check if this test case had any failures across iterations
-        if eval_result.accuracy < 1.0:  # Some iterations failed
-            # Get details from individual iterations
-            failed_iterations = [r for r in eval_result.individual_results if not r.correct]
-            
-            failure_info = {
-                "test_case_id": getattr(eval_result, 'id', f"unknown_{hash(eval_result.question) % 10000}"),
-                "question": eval_result.question,
-                "category": eval_result.category,
-                "difficulty": eval_result.difficulty,
-                "expected": eval_result.intent_expected,
-                "accuracy": eval_result.accuracy,
-                "iterations_total": eval_result.iterations,
-                "iterations_failed": len(failed_iterations),
-                "most_common_prediction": eval_result.most_common_prediction,
-                "prediction_consistency": eval_result.prediction_consistency,
-                "mean_confidence_when_wrong": eval_result.mean_confidence_incorrect if eval_result.mean_confidence_incorrect else 0,
-                "mean_confidence_when_right": eval_result.mean_confidence_correct if eval_result.mean_confidence_correct else 0,
-                "failure_examples": [
-                    {
-                        "predicted": f.predicted,
-                        "confidence": f.confidence,
-                        "reasoning": f.reasoning,
-                        "raw_response": f.raw_response
-                    } for f in failed_iterations
-                ],
-                "notes": eval_result.notes
+        # Group iterations for this test case
+        iterations_data = []
+        
+        for i, individual_result in enumerate(eval_result.individual_results, 1):
+            iteration_info = {
+                "iteration_number": i,
+                "predicted": individual_result.predicted,
+                "confidence": individual_result.confidence,
+                "reasoning": individual_result.reasoning,
+                "raw_response": individual_result.raw_response,
+                "correct": individual_result.correct,
+                "inference_time": individual_result.inference_time
             }
-            failures.append(failure_info)
-        else:
-            # Perfect accuracy case - include all successful reasoning
-            successful_iterations = [r for r in eval_result.individual_results if r.correct]
+            iterations_data.append(iteration_info)
+        
+        # Separate successes and failures for summary
+        successes = [iter_data for iter_data in iterations_data if iter_data["correct"]]
+        failures = [iter_data for iter_data in iterations_data if not iter_data["correct"]]
+        
+        test_case_info = {
+            "test_case_id": getattr(eval_result, 'id', f"unknown_{hash(eval_result.question) % 10000}"),
+            "question": eval_result.question,
+            "category": eval_result.category,
+            "difficulty": eval_result.difficulty,
+            "expected": eval_result.intent_expected,
+            "notes": eval_result.notes,
             
-            success_info = {
-                "test_case_id": getattr(eval_result, 'id', f"unknown_{hash(eval_result.question) % 10000}"),
-                "question": eval_result.question,
-                "category": eval_result.category,
-                "difficulty": eval_result.difficulty,
-                "expected": eval_result.intent_expected,
-                "mean_confidence": eval_result.mean_confidence,
-                "prediction_consistency": eval_result.prediction_consistency,
-                "success_examples": [
-                    {
-                        "predicted": s.predicted,
-                        "confidence": s.confidence,
-                        "reasoning": s.reasoning,
-                        "raw_response": s.raw_response
-                    } for s in successful_iterations
-                ],
-                "notes": eval_result.notes
-            }
-            successes.append(success_info)
+            # Summary metrics
+            "accuracy": eval_result.accuracy,
+            "iterations_total": eval_result.iterations,
+            "iterations_successful": len(successes),
+            "iterations_failed": len(failures),
+            "most_common_prediction": eval_result.most_common_prediction,
+            "prediction_consistency": eval_result.prediction_consistency,
+            "mean_confidence": eval_result.mean_confidence,
+            "mean_confidence_when_right": eval_result.mean_confidence_correct if eval_result.mean_confidence_correct else 0,
+            "mean_confidence_when_wrong": eval_result.mean_confidence_incorrect if eval_result.mean_confidence_incorrect else 0,
+            
+            # Detailed iteration data
+            "iterations": iterations_data,
+            
+            # Quick access to successes/failures
+            "successful_iterations": successes,
+            "failed_iterations": failures
+        }
+        
+        test_cases_analysis.append(test_case_info)
+    
+    # Calculate aggregate statistics
+    all_failures = []
+    all_successes = []
+    
+    for case in test_cases_analysis:
+        if case["iterations_failed"] > 0:
+            all_failures.append({
+                "category": case["category"],
+                "difficulty": case["difficulty"]
+            })
+        if case["iterations_successful"] > 0:
+            all_successes.append({
+                "category": case["category"], 
+                "difficulty": case["difficulty"]
+            })
     
     return {
-        "total_failures": len(failures),
-        "total_successes": len(successes),
-        "failure_rate_by_category": _calculate_failure_by_category(failures, successes),
-        "failure_rate_by_difficulty": _calculate_failure_by_difficulty(failures, successes),
-        "failed_cases": failures,
-        "successful_cases": successes
+        "total_test_cases": len(test_cases_analysis),
+        "total_cases_with_failures": sum(1 for case in test_cases_analysis if case["iterations_failed"] > 0),
+        "total_cases_with_successes": sum(1 for case in test_cases_analysis if case["iterations_successful"] > 0),
+        "failure_rate_by_category": _calculate_failure_by_category(all_failures, all_successes),
+        "failure_rate_by_difficulty": _calculate_failure_by_difficulty(all_failures, all_successes),
+        "test_cases": test_cases_analysis
     }
 
 
@@ -213,7 +223,7 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
     print("-" * 90)
     
     # Table rows
-    for i, metrics in enumerate(sorted_metrics):
+    for metrics in sorted_metrics:
         # Determine status
         if metrics.accuracy >= 0.85:
             status = "✅ EXCELLENT"
@@ -224,15 +234,7 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
         else:
             status = "❌ POOR"
         
-        # Highlight best model
         model_name = metrics.name.replace("-q4f16_1-MLC", "")
-        if i == 0:
-            model_name = f"🥇 {model_name}"
-        elif i == 1:
-            model_name = f"🥈 {model_name}"
-        elif i == 2:
-            model_name = f"🥉 {model_name}"
-        
         print(f"{model_name:<35} {metrics.size_mb:<10.1f} {metrics.accuracy:<10.1%} {metrics.avg_inference_time:<10.3f} {status:<15}")
     
     # Summary statistics
@@ -245,13 +247,29 @@ def print_model_comparison_table(model_metrics: List[ModelMetrics]) -> None:
     print(f"   Smallest Model: {min(sizes):.1f} MB")
     print(f"   Fastest Inference: {min(times):.3f}s")
     
-    # Recommendations
-    best_overall = sorted_metrics[0]
+    # Smart recommendations considering multiple factors
+    # Find models with best accuracy
+    max_accuracy = max(m.accuracy for m in model_metrics)
+    top_accuracy_models = [m for m in model_metrics if m.accuracy == max_accuracy]
+    
+    # Among top accuracy models, find the best overall (fastest + smallest)
+    if len(top_accuracy_models) > 1:
+        # Use combined score: lower is better (normalized speed + size)
+        def combined_score(model):
+            # Normalize to 0-1 range
+            speed_norm = model.avg_inference_time / max(m.avg_inference_time for m in top_accuracy_models)
+            size_norm = model.size_mb / max(m.size_mb for m in top_accuracy_models)
+            return speed_norm + size_norm  # Equal weight to speed and size
+        
+        best_overall = min(top_accuracy_models, key=combined_score)
+    else:
+        best_overall = top_accuracy_models[0]
+    
     smallest = min(model_metrics, key=lambda x: x.size_mb)
     fastest = min(model_metrics, key=lambda x: x.avg_inference_time)
     
     print(f"\n💡 RECOMMENDATIONS:")
-    print(f"   🏆 Best Overall: {best_overall.name.replace('-q4f16_1-MLC', '')} ({best_overall.accuracy:.1%} accuracy)")
+    print(f"   🏆 Best Overall: {best_overall.name.replace('-q4f16_1-MLC', '')} ({best_overall.accuracy:.1%} accuracy, {best_overall.avg_inference_time:.3f}s, {best_overall.size_mb:.0f}MB)")
     print(f"   📱 Most Efficient: {smallest.name.replace('-q4f16_1-MLC', '')} ({smallest.size_mb:.1f} MB)")
     print(f"   ⚡ Fastest: {fastest.name.replace('-q4f16_1-MLC', '')} ({fastest.avg_inference_time:.3f}s avg)")
 
