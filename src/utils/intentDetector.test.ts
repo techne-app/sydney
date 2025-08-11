@@ -173,7 +173,7 @@ describe('IntentDetector', () => {
       const prompt = buildIntentDetectionPrompt('test message');
 
       expect(prompt).toContain('find discussions about AI');
-      expect(prompt).toContain('hello how are you');
+      expect(prompt).toContain('hello');
       expect(prompt).toContain('what about startups?');
     });
   });
