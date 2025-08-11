@@ -68,36 +68,38 @@ python mlc_llm/eval_intent_detection.py --export-results results.json
 
 ## Model Evaluation Results
 
-### Phase 1: Chat vs Action Classification (138 Test Cases)
+### Latest Evaluation (138 Test Cases)
 
-| Model | Size (MB) | Accuracy | Precision | Recall | F1 Score | Production Ready | 
-|-------|-----------|----------|-----------|--------|----------|------------------|
-| 🥇 **Phi-3.5-mini-instruct** | 2,052 | **87.0%** | **93.2%** | **84.1%** | **0.885** | ✅ **EXCELLENT** |
-| 🥈 **Llama-3.2-3B-Instruct** | 1,733 | **85.8%** | **86.9%** | **90.1%** | **0.885** | ✅ **EXCELLENT** |
-| 🥉 **Gemma-2-2B-it** | 1,420 | **76.8%** | **74.0%** | **93.9%** | **0.828** | ⚠️ **ACCEPTABLE** |
+| Model | Size (MB) | Accuracy | Avg Time (s) | Production Ready | 
+|-------|-----------|----------|--------------|------------------|
+| 🥇 **Phi-3.5-mini-instruct** | 2,052.0 | **87.7%** | 2.839 | ✅ **EXCELLENT** |
+| 🥈 **Llama-3.2-3B-Instruct** | 1,732.5 | **87.4%** | 1.399 | ✅ **EXCELLENT** |
+| 🥉 **Gemma-2-2B-it** | 1,419.7 | **76.1%** | 1.697 | ⚠️ **ACCEPTABLE** |
 
-### Multi-Run Accuracy Analysis 📊
-**Accuracy across five evaluation runs (138 test cases each):**
+### Performance Summary 📊
 
-| Model | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Mean | Std Dev |
-|-------|-------|-------|-------|-------|-------|------|---------|
-| **Phi-3.5-mini-instruct** | 85.9% | 87.0% | 87.0% | 87.7% | **87.0%** | **86.9%** | **±0.7%** |
-| **Llama-3.2-3B-Instruct** | 85.9% | 87.4% | 88.9% | 85.9% | **85.8%** | **86.8%** | **±1.2%** |
-| **Gemma-2-2B-it** | 76.1% | 76.1% | 76.1% | 76.1% | **76.8%** | **76.2%** | **±0.3%** |
+**Best Accuracy**: 87.7% (Phi-3.5-mini-instruct)
+**Smallest Model**: 1,419.7 MB (Gemma-2-2B-it)  
+**Fastest Inference**: 1.399s (Llama-3.2-3B-Instruct)
 
-### Key Findings
+### Key Findings & Recommendations 💡
 
-#### 🏆 Phi-3.5-mini-instruct (RECOMMENDED)
-- **Consistent high accuracy** averaging 86.9% across 5 runs with latest at 87.0%
-- **Exceptional precision** at 93.2% - makes very few false positive errors
-- **Most consistent** performance across runs (±0.7% variance) - improved stability
-- **Best for applications** where false positives (classifying chat as search) are costly
+#### 🏆 Phi-3.5-mini-instruct (BEST OVERALL)
+- **Highest accuracy** at 87.7% - best intent detection performance
+- **Consistent results** across multiple evaluation runs
+- **Production ready** - excellent for applications requiring high accuracy
+- **Trade-off**: Slower inference at 2.839s average response time
 
-#### ✅ Llama-3.2-3B-Instruct (ALTERNATIVE)
-- **Stable performance** averaging 86.8% across 5 runs with latest at 85.8%
-- **Excellent recall** at 90.1% - catches more search intents 
-- **Smaller model** at 1.7GB - good balance of performance and efficiency
-- **Moderate variance** (±1.2%) - reasonably predictable performance
+#### ⚡ Llama-3.2-3B-Instruct (FASTEST)
+- **Excellent accuracy** at 87.4% - nearly matches Phi-3.5
+- **Fastest inference** at 1.399s - 2x faster than Phi-3.5
+- **Smaller footprint** at 1,732.5 MB vs 2,052.0 MB
+- **Best balance** of speed, size, and accuracy
+
+#### 📱 Gemma-2-2B-it (MOST EFFICIENT)
+- **Smallest model** at 1,419.7 MB - best for resource-constrained environments
+- **Acceptable accuracy** at 76.1% - suitable for non-critical applications
+- **Good performance** for a compact model
 
 ## Test Dataset Structure (BFCL Format)
 

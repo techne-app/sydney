@@ -73,7 +73,7 @@ def evaluate_all_models(temperature: float = 0.1, dataset_filter: str = None, ve
             print(f"✅ {model_name} complete:")
             print(f"   Accuracy: {model_metric.accuracy:.1%}")
             print(f"   Size: {model_metric.size_mb:.1f} MB")
-            print(f"   Avg Response: {model_metric.avg_response_time:.3f}s")
+            print(f"   Avg Response: {model_metric.avg_inference_time:.3f}s")
             
             # Clean up memory
             evaluator.cleanup()
