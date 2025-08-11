@@ -5,7 +5,7 @@ import { ConversationManager } from '../../utils/conversationUtils';
 import { webLLMClient } from '../../utils/webLLMClient';
 import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
-import { IntentDetector } from '../../utils/intentDetector';
+import { IntentDetector, IntentDetectionResult } from '../../utils/intentDetector';
 import { SearchService } from '../../utils/searchService';
 import { logger } from '../../utils/logger';
 import { Modal } from './Modal';
@@ -54,6 +54,45 @@ const getUserFriendlyErrorMessage = (error: string): string => {
   }
   // Default case for other errors
   return 'Something went wrong - please try again';
+};
+
+// Helper function to detect if user is requesting a pinned thread summary
+const isPinnedThreadSummaryRequest = (
+  message: string, 
+  intentResult: IntentDetectionResult, 
+  pinnedCard: ThreadCardData | null
+): boolean => {
+  const lowerMessage = message.toLowerCase();
+  const summaryKeywords = ['summarize', 'summary', 'sum up', 'overview'];
+  const threadKeywords = ['thread', 'discussion', 'this'];
+  
+  const hasSummaryKeyword = summaryKeywords.some(keyword => lowerMessage.includes(keyword));
+  const hasThreadKeyword = threadKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  // Check if the intent result reasoning mentions pinned thread or summary
+  const reasoningMentionsPinned = intentResult.reasoning?.toLowerCase().includes('pinned') || false;
+  const reasoningMentionsSummary = intentResult.reasoning?.toLowerCase().includes('summary') || false;
+  
+  return (hasSummaryKeyword && hasThreadKeyword) || reasoningMentionsPinned || reasoningMentionsSummary;
+};
+
+// Helper function to generate pinned thread summary response
+const generatePinnedThreadSummary = (pinnedCard: ThreadCardData | null): string => {
+  if (!pinnedCard) {
+    return "I don't see a pinned thread to summarize. Please drag a thread from the sidebar to pin it first, then ask me to summarize it.";
+  }
+  
+  return `## ${pinnedCard.theme}
+
+**Category**: ${pinnedCard.category}
+
+**Summary**: ${pinnedCard.summary}
+
+**Discussion**: ${pinnedCard.comment_count} comments on Hacker News
+
+**Original Story**: [${pinnedCard.story_title}](${pinnedCard.story_url})
+
+**Join Discussion**: [View thread](${pinnedCard.anchor})`;
 };
 
 interface ChatInterfaceProps {
@@ -341,7 +380,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         logger.model('Model already loaded, checking for search intent...');
         try {
           showTempStatus('💭 Understanding your request...', 800);
-          const intentResult = await IntentDetector.detectSearchIntent(userMessage);
+          const intentResult = await IntentDetector.detectSearchIntent(userMessage, undefined, pinnedCard);
           logger.intent('Intent detection result:', intentResult);
           
           if (intentResult.isSearch && intentResult.searchQuery && intentResult.confidence > 0.5) {
@@ -374,6 +413,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             return;
           } else {
             logger.chat('No search intent detected or low confidence, continuing with chat. Confidence:', intentResult.confidence);
+            
+            // Check if this is a request to summarize pinned thread
+            if (isPinnedThreadSummaryRequest(userMessage, intentResult, pinnedCard)) {
+              logger.chat('Detected pinned thread summary request');
+              const summaryResponse = generatePinnedThreadSummary(pinnedCard);
+              
+              // Update the assistant message with the summary
+              await ConversationManager.updateMessage(
+                workingConversation.id, 
+                assistantMessage.id, 
+                summaryResponse
+              );
+              
+              // Clear streaming state
+              setStreamingMessage(null);
+              
+              // Update conversation in UI
+              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+              if (finalConversation) {
+                onConversationUpdated(finalConversation);
+              }
+              return;
+            }
           }
         } catch (error) {
           logger.error('Intent detection failed:', error);
@@ -412,7 +474,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           logger.model('Model loading complete, now checking for search intent...');
           try {
             showTempStatus('💭 Understanding your request...', 800);
-            const intentResult = await IntentDetector.detectSearchIntent(userMessage);
+            const intentResult = await IntentDetector.detectSearchIntent(userMessage, undefined, pinnedCard);
             logger.intent('Intent detection result:', intentResult);
             
             if (intentResult.isSearch && intentResult.searchQuery && intentResult.confidence > 0.5) {
@@ -445,6 +507,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               return false; // Abort chat
             } else {
               logger.chat('No search intent detected or low confidence, continuing with chat. Confidence:', intentResult.confidence);
+              
+              // Check if this is a request to summarize pinned thread
+              if (isPinnedThreadSummaryRequest(userMessage, intentResult, pinnedCard)) {
+                logger.chat('Detected pinned thread summary request');
+                const summaryResponse = generatePinnedThreadSummary(pinnedCard);
+                
+                // Update the assistant message with the summary
+                await ConversationManager.updateMessage(
+                  workingConversation.id, 
+                  assistantMessage.id, 
+                  summaryResponse
+                );
+                
+                // Clear streaming state
+                setStreamingMessage(null);
+                
+                // Update conversation in UI
+                const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+                if (finalConversation) {
+                  onConversationUpdated(finalConversation);
+                }
+                return false; // Abort chat
+              }
             }
           } catch (error) {
             logger.error('Intent detection failed:', error);

@@ -11,9 +11,13 @@ export const SEARCH_INTENT_PROMPT = `You are an intelligent assistant that deter
 SEARCH INTENT = User wants to find existing discussions, posts, or threads about a topic
 CHAT INTENT = User wants YOU to provide opinions, explanations, or conversational responses
 
+Special case - PINNED THREAD SUMMARY:
+- If user asks to "summarize this thread" and there IS a pinned thread, respond with chat intent (you'll provide the summary)
+- If user asks to "summarize this thread" and there is NO pinned thread, respond with chat intent (you'll explain no thread is pinned)
+
 Key distinctions:
 - SEARCH: "find", "search", "show me", "look up", "any posts about", "what's been said about"
-- CHAT: "what do you think", "explain", "tell me about", "your opinion", "help me understand", "what is"
+- CHAT: "what do you think", "explain", "tell me about", "your opinion", "help me understand", "what is", "summarize this thread"
 
 User message: "{message}"
 
@@ -40,5 +44,8 @@ Examples:
 - "what is blockchain?" → {"isSearch": false, "searchQuery": null, "confidence": 0.8, "reasoning": "Asking for definition/explanation, not searching"}
 - "good morning" → {"isSearch": false, "searchQuery": null, "confidence": 0.9, "reasoning": "Time-based greeting, social interaction"}
 - "I don't understand" → {"isSearch": false, "searchQuery": null, "confidence": 0.9, "reasoning": "Expressing confusion, not requesting search"}
+- "summarize this thread" (with pinned thread) → {"isSearch": false, "searchQuery": null, "confidence": 0.9, "reasoning": "User wants me to summarize the pinned thread"}
+- "summarize this thread" (no pinned thread) → {"isSearch": false, "searchQuery": null, "confidence": 0.8, "reasoning": "User wants thread summary but no thread is pinned"}
+- "can you summarize the discussion?" (with pinned thread) → {"isSearch": false, "searchQuery": null, "confidence": 0.9, "reasoning": "Asking me to summarize the pinned discussion"}
 
 JSON Response:`;

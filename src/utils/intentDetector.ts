@@ -2,6 +2,7 @@ import { webLLMClient } from './webLLMClient';
 import { configStore } from './configStore';
 import { logger } from './logger';
 import { SEARCH_INTENT_PROMPT } from '../prompts/searchIntent';
+import { ThreadCardData } from '../types/chat';
 
 export interface IntentDetectionResult {
   isSearch: boolean;
@@ -20,14 +21,16 @@ export class IntentDetector {
    * Detect if a message contains search intent using LLM
    * @param message - User message to analyze
    * @param callbacks - Optional callbacks for loading state
+   * @param pinnedThread - Optional pinned thread context
    * @returns Promise<IntentDetectionResult>
    */
   static async detectSearchIntent(
     message: string, 
-    callbacks?: IntentDetectionCallbacks
+    callbacks?: IntentDetectionCallbacks,
+    pinnedThread?: ThreadCardData | null
   ): Promise<IntentDetectionResult> {
     logger.model('Starting intent detection for message:', message);
-    const prompt = this.buildIntentDetectionPrompt(message);
+    const prompt = this.buildIntentDetectionPrompt(message, pinnedThread);
     logger.debug('Built intent detection prompt');
     const response = await this.queryLLM(prompt, callbacks);
     logger.debug('Raw LLM response:', response);
@@ -37,12 +40,30 @@ export class IntentDetector {
   }
 
   /**
-   * Build prompt for intent detection
+   * Build prompt for intent detection with optional pinned thread context
    * @param message - User message
+   * @param pinnedThread - Optional pinned thread data
    * @returns formatted prompt
    */
-  private static buildIntentDetectionPrompt(message: string): string {
-    return SEARCH_INTENT_PROMPT.replace('{message}', message);
+  private static buildIntentDetectionPrompt(message: string, pinnedThread?: ThreadCardData | null): string {
+    let contextInfo = '';
+    
+    if (pinnedThread) {
+      contextInfo = `Context: User has pinned this thread:
+- Title: "${pinnedThread.story_title}"
+- Theme: "${pinnedThread.theme}"
+- Category: "${pinnedThread.category}"
+- Comments: ${pinnedThread.comment_count}
+- Summary: "${pinnedThread.summary}"
+
+`;
+    } else {
+      contextInfo = `Context: No thread currently pinned.
+
+`;
+    }
+    
+    return contextInfo + SEARCH_INTENT_PROMPT.replace('{message}', message);
   }
 
   /**
