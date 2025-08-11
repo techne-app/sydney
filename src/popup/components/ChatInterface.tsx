@@ -205,10 +205,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       const cardData = JSON.parse(e.dataTransfer.getData('application/json')) as ThreadCardData;
       setPinnedCard(cardData);
       
-      // Save to database if we have an active conversation
-      if (activeConversation) {
+      // Save to database only if we have a saved conversation (not draft)
+      if (activeConversation && !activeConversation.id.startsWith('draft_')) {
         await ConversationManager.pinThreadToConversation(activeConversation.id, cardData);
-        // Update local conversation state
+      }
+      
+      // Always update local conversation state (works for both draft and saved)
+      if (activeConversation) {
         onConversationUpdated({
           ...activeConversation,
           pinnedThread: cardData,
