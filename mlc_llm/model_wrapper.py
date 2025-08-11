@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import re
+import time
 import json
 
 try:
@@ -32,6 +33,7 @@ class MLCModelWrapper:
         self.engine = None
         self.model_path = None
         self.model_size_mb = 0.0
+        self.last_inference_time = 0.0  # Track timing of last inference
         self._find_model_path()
         self._calculate_model_size()
     
@@ -99,15 +101,20 @@ class MLCModelWrapper:
             return None
             
         try:
+            # Measure only the actual inference time (exclude initialization)
+            
+            start_time = time.time()
             response = self.engine.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=False
             )
+            self.last_inference_time = time.time() - start_time
             return response.choices[0].message.content
         except Exception as e:
             print(f"❌ Model call failed: {e}")
+            self.last_inference_time = 0.0
             return None
     
     def call_model_with_system(self, system_prompt: str, user_prompt: str, 

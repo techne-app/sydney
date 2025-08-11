@@ -207,10 +207,10 @@ class IntentEvaluator:
         # Build prompt
         prompt = self.prompt_template.replace('{message}', test_case.question)
         
-        # Measure inference time
-        start_time = time.time()
+        # Call model and measure only the inference time
         response = self.model_wrapper.call_model(prompt, temperature, max_tokens=500)
-        inference_time = time.time() - start_time
+        # Get timing from model wrapper (if available, otherwise estimate)
+        inference_time = getattr(self.model_wrapper, 'last_inference_time', 0.0)
         
         if not response:
             return None
