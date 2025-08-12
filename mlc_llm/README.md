@@ -28,8 +28,6 @@ The core idea here is that we want to use SLMs for determining the user intent a
   - [Run Evaluations](#run-evaluations)
   - [Extending Evaluations](#extending-evaluations)
 - [Future Enhancements](#future-enhancements)
-  - [Planned Improvements](#planned-improvements)
-  - [MCP Integration Readiness](#mcp-integration-readiness)
 
 ## Overview
 
@@ -295,7 +293,6 @@ uv run python mlc_llm/eval_single_step.py --model "Phi-3.5-mini-instruct-q4f16_1
 
 ## Future Enhancements
 
-### Planned Improvements
 - **More simple actions and evaluations** using user feedback
 - **Multi-step intent detection and reasoning** for complex queries
 - **Contextual awareness** using conversation history
