@@ -3,7 +3,7 @@
     "description": "Intent detection test cases using real get_thread_cards API for MCP evaluation",
     "version": "1.0.0",
     "format": "Berkeley Function Calling Leaderboard (BFCL) compatible",
-    "total_cases": 158,
+    "total_cases": 157,
     "backend_api": "get_thread_cards_endpoint from Azure Functions",
     "evaluation_phases": {
       "intent_classification": "Phase 1: chat vs action (binary classification)",
@@ -3547,43 +3547,6 @@
       "evaluation_phases": [
         "intent_classification",
         "function_calling"
-      ]
-    },
-    {
-      "id": "chat_073",
-      "question": "",
-      "category": "edge_case",
-      "difficulty": "hard",
-      "notes": "Empty query",
-      "intent_expected": "chat",
-      "action_type_expected": null,
-      "function": [
-        {
-          "name": "no_action",
-          "description": "No action required - conversational response",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "response_type": {
-                "type": "string",
-                "enum": [
-                  "greeting",
-                  "opinion",
-                  "explanation",
-                  "social"
-                ]
-              }
-            },
-            "required": [
-              "response_type"
-            ]
-          }
-        }
-      ],
-      "expected_function_call": "no_action(response_type='social')",
-      "valid_alternatives": [],
-      "evaluation_phases": [
-        "intent_classification"
       ]
     },
     {

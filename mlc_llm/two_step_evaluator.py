@@ -400,7 +400,8 @@ class TwoStepEvaluator:
         )
         
         if verbose:
-            print(f"   📊 Results: Step1:{step1_accuracy:.1%} Step2:{step2_accuracy:.1%} Overall:{overall_accuracy:.1%}")
+            step2_display = f"{step2_accuracy:.1%}" if step2_accuracy is not None else "N/A"
+            print(f"   📊 Results: Step1:{step1_accuracy:.1%} Step2:{step2_display} Overall:{overall_accuracy:.1%}")
         
         return aggregated_result
     

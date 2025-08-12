@@ -143,47 +143,62 @@ The system supports three core functions for handling user requests:
 
 ## Model Evaluation Results
 
-### Single-Step vs Two-Step Comparison (144/158 Test Cases, 10 Iterations)
+### Single-Step vs Two-Step Comparison (157 Test Cases, 1 Iteration)
 
-> **Note**: Single-step evaluation uses 144 test cases, two-step uses 158 test cases (slightly different dataset versions), but both use 10 iterations for statistical reliability.
-
-#### Single-Step Results
-| Model | Overall Accuracy | Avg Time |
-|-------|------------------|----------|
-| Llama-3.2-3B-Instruct | 81.1% | 0.829s |
-| gemma-2-2b-it | 76.7% | 1.695s |
-| Phi-3.5-mini-instruct | 72.3% | 2.953s |
+#### Single-Step Results  
+| Model | Intent Accuracy | Function Accuracy | Overall Accuracy | Avg Time |
+|-------|-----------------|-------------------|------------------|----------|
+| Llama-3.2-3B-Instruct | 85.4% | 80.9% | 80.9% | 1.046s |
+| gemma-2-2b-it | 79.7% | 77.1% | 77.1% | 1.622s |
+| Phi-3.5-mini-instruct | 75.5% | 71.2% | 71.2% | 3.324s |
 
 #### Two-Step Results  
-| Model | Overall Accuracy | Total Time |
-|-------|------------------|------------|
-| Phi-3.5-mini-instruct | 77.3% | 4.890s |
-| gemma-2-2b-it | 73.4% | 2.841s |
-| Llama-3.2-3B-Instruct | 70.8% | 2.467s |
+| Model | Step1 Accuracy | Step2 Accuracy | Overall Accuracy | Total Time |
+|-------|----------------|----------------|------------------|------------|
+| Phi-3.5-mini-instruct | 80.9% | 87.0% | 77.1% | 4.923s |
+| gemma-2-2b-it | 79.5% | 70.4% | 73.7% | 2.926s |
+| Llama-3.2-3B-Instruct | 72.4% | 75.7% | 71.2% | 1.987s |
 
-#### Performance Differences
+#### Architecture Performance Comparison
 
-**Llama-3.2-3B-Instruct**:
-- Single-step: 81.1% vs Two-step: 70.8% = +10.3% accuracy gain
-- Speed: 0.829s vs 2.467s = 3.0x faster
+**Single-Step vs Two-Step Accuracy Differences**:
+- **Llama-3.2-3B-Instruct**: Single-step 80.9% vs Two-step 71.2% = **+9.7% advantage for single-step**
+- **gemma-2-2b-it**: Single-step 77.1% vs Two-step 73.7% = **+3.4% advantage for single-step**  
+- **Phi-3.5-mini-instruct**: Single-step 71.2% vs Two-step 77.1% = **-5.9% advantage for two-step**
 
-**gemma-2-2b-it**:
-- Single-step: 76.7% vs Two-step: 73.4% = +3.3% accuracy gain  
-- Speed: 1.695s vs 2.841s = 1.7x faster
+**Speed Comparison**:
+- **Llama-3.2-3B-Instruct**: 1.046s vs 1.987s = **1.9x faster single-step**
+- **gemma-2-2b-it**: 1.622s vs 2.926s = **1.8x faster single-step**
+- **Phi-3.5-mini-instruct**: 3.324s vs 4.923s = **1.5x faster single-step**
 
-**Phi-3.5-mini-instruct**:
-- Single-step: 72.3% vs Two-step: 77.3% = -5.0% accuracy loss
-- Speed: 2.953s vs 4.890s = 1.7x faster
+#### Key Findings
 
-#### Overall Summary
-- Average accuracy: Single-step 76.7% vs Two-step 73.8% = +2.9% difference
-- Speed improvement: 2x-3x faster inference across all models
-- Architecture simplicity: One prompt vs two sequential LLM calls
-- Resource efficiency: Lower memory usage, fewer model loads
+**Best Overall Performance**: 
+- **Single-Step**: Llama-3.2-3B-Instruct (80.9% accuracy, 1.046s)
+- **Two-Step**: Phi-3.5-mini-instruct (77.1% accuracy, 4.923s)
+
+**Architecture Trade-offs**:
+
+**Single-Step Advantages**:
+- **Speed**: 1.5x-1.9x faster across all models
+- **Simplicity**: One LLM call, easier to debug
+- **Resource Efficiency**: Lower memory usage, fewer model loads
+- **Better for 2/3 models**: Llama-3.2-3B and gemma-2-2b perform better
+
+**Two-Step Advantages**:
+- **Granular Debugging**: Separate measurement of intent vs function calling
+- **Specialized Optimization**: Each step independently optimizable
+- **MCP-Ready**: Natural fit for tool calling patterns
+- **Better for Phi-3.5**: Only model that benefits from two-step approach
+
+**Model-Specific Insights**:
+- **Llama-3.2-3B-Instruct**: Excels at unified reasoning (single-step), struggles with sequential tasks
+- **Phi-3.5-mini-instruct**: Benefits from task separation, excellent at function selection (87.0% Step 2)
+- **gemma-2-2b-it**: Consistent across both approaches, slight preference for single-step
 
 ## Test Dataset Structure
 
-Uses **BFCL (Berkeley Function Calling Leaderboard) format** with 158 test cases covering:
+Uses **BFCL (Berkeley Function Calling Leaderboard) format** with 157 test cases covering:
 
 - **Intent Classification**: All test cases evaluate chat vs action classification
 - **Function Calling**: Action cases evaluate function selection and parameter extraction
@@ -263,7 +278,7 @@ uv run python mlc_llm/eval_single_step.py --model "Phi-3.5-mini-instruct-q4f16_1
 
 ### Requirements
 - **Prompts**: Evaluation scripts require `src/prompts/singleStep.ts` and `src/prompts/actionOnly.ts` from the TypeScript source
-- **Dataset**: Uses `bfcl_testcases.json` with 158 test cases
+- **Dataset**: Uses `bfcl_testcases.json` with 157 test cases
 - **Models**: Download models to `models/` directory using git-lfs
 
 ## Future Enhancements
