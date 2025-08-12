@@ -95,9 +95,9 @@ After comprehensive evaluation, the **single-step approach proves superior** acr
 #### Single-Step Results (Recommended Approach)
 | Model | Overall Accuracy | Avg Time | Status |
 |-------|------------------|----------|---------|
-| **Llama-3.2-3B-Instruct** | **81.6%** | 1.063s | ✅ **EXCELLENT** |
-| **gemma-2-2b-it** | **77.4%** | 1.683s | ⚠️ **ACCEPTABLE** |
-| **Phi-3.5-mini-instruct** | 73.4% | 3.499s | ❌ **POOR** |
+| **Llama-3.2-3B-Instruct** | **81.1%** | 0.829s | ✅ **EXCELLENT** |
+| **gemma-2-2b-it** | **76.7%** | 1.695s | ⚠️ **ACCEPTABLE** |
+| **Phi-3.5-mini-instruct** | 72.3% | 2.953s | ❌ **POOR** |
 
 #### Two-Step Results (Previous Approach)  
 | Model | Overall Accuracy | Total Time | Status |
@@ -109,31 +109,31 @@ After comprehensive evaluation, the **single-step approach proves superior** acr
 #### 🎯 Key Performance Differences
 
 **🚀 Llama-3.2-3B-Instruct: MASSIVE IMPROVEMENT**
-- **Single-step**: 81.6% vs **Two-step**: 70.8% = **+10.8% accuracy gain**
-- **Speed**: 1.063s vs ~2.47s = **2.3x faster**
+- **Single-step**: 81.1% vs **Two-step**: 70.8% = **+10.3% accuracy gain**
+- **Speed**: 0.829s vs ~2.47s = **3.0x faster**
 - **Status**: Upgraded from ❌ POOR → ✅ EXCELLENT
 - **New champion**: Best overall performer
 
 **📈 gemma-2-2b-it: SOLID GAINS**
-- **Single-step**: 77.4% vs **Two-step**: 73.4% = **+4.0% accuracy gain**  
-- **Speed**: 1.683s vs ~2.84s = **1.7x faster**
+- **Single-step**: 76.7% vs **Two-step**: 73.4% = **+3.3% accuracy gain**  
+- **Speed**: 1.695s vs ~2.84s = **1.7x faster**
 - **Status**: Improved within ⚠️ ACCEPTABLE tier
 
 **📉 Phi-3.5-mini-instruct: REGRESSION**
-- **Single-step**: 73.4% vs **Two-step**: 77.3% = **-3.9% accuracy loss**
-- **Speed**: 3.499s vs ~4.89s = **1.4x faster but still slowest**
+- **Single-step**: 72.3% vs **Two-step**: 77.3% = **-5.0% accuracy loss**
+- **Speed**: 2.953s vs ~4.89s = **1.7x faster but still slowest**
 - **Status**: Downgraded from ⚠️ ACCEPTABLE → ❌ POOR
 
 #### 🏆 Overall Comparison Summary
-- **Average accuracy**: Single-step 77.5% vs Two-step 73.8% = **+3.7% better**
+- **Average accuracy**: Single-step 76.7% vs Two-step 73.8% = **+2.9% better**
 - **Speed improvement**: 2x-3x faster inference across all models
 - **Architecture simplicity**: One prompt vs two sequential LLM calls
 - **Resource efficiency**: Lower memory usage, fewer model loads
 
 #### 💡 Production Recommendation
 **Switch to single-step approach with Llama-3.2-3B-Instruct**:
-- ✅ **Highest accuracy** (81.6%)
-- ✅ **Fastest inference** (1.063s)  
+- ✅ **Highest accuracy** (81.1%)
+- ✅ **Fastest inference** (0.829s)  
 - ✅ **Best cost efficiency** (smallest model size + fastest speed)
 - ✅ **Dramatic improvement** over current two-step implementation
 
