@@ -5,7 +5,7 @@ import { ConversationManager } from '../../utils/conversationUtils';
 import { webLLMClient } from '../../utils/webLLMClient';
 import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
-import { IntentDetector, IntentDetectionResult } from '../../utils/intentDetector';
+import { IntentDetector, FunctionCallingResult } from '../../utils/intentDetector';
 import { SearchService } from '../../utils/searchService';
 import { logger } from '../../utils/logger';
 import { Modal } from './Modal';
@@ -56,24 +56,10 @@ const getUserFriendlyErrorMessage = (error: string): string => {
   return 'Something went wrong - please try again';
 };
 
-// Helper function to detect if user is requesting a pinned thread summary
-const isPinnedThreadSummaryRequest = (
-  message: string, 
-  intentResult: IntentDetectionResult, 
-  pinnedCard: ThreadCardData | null
-): boolean => {
-  const lowerMessage = message.toLowerCase();
-  const summaryKeywords = ['summarize', 'summary', 'sum up', 'overview'];
-  const threadKeywords = ['thread', 'discussion', 'this'];
-  
-  const hasSummaryKeyword = summaryKeywords.some(keyword => lowerMessage.includes(keyword));
-  const hasThreadKeyword = threadKeywords.some(keyword => lowerMessage.includes(keyword));
-  
-  // Check if the intent result reasoning mentions pinned thread or summary
-  const reasoningMentionsPinned = intentResult.reasoning?.toLowerCase().includes('pinned') || false;
-  const reasoningMentionsSummary = intentResult.reasoning?.toLowerCase().includes('summary') || false;
-  
-  return (hasSummaryKeyword && hasThreadKeyword) || reasoningMentionsPinned || reasoningMentionsSummary;
+// Helper function to detect if user is requesting a pinned thread summary  
+const isPinnedThreadSummaryRequest = (functionResult: FunctionCallingResult): boolean => {
+  return functionResult.intent === 'action' && 
+         functionResult.functionCall?.name === 'summarize_pinned_thread';
 };
 
 // Helper function to generate pinned thread summary response - returns only the summary text
@@ -386,43 +372,43 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         logger.model('Model already loaded, checking for search intent...');
         try {
           showTempStatus('💭 Understanding your request...', 800);
-          const intentResult = await IntentDetector.detectSearchIntent(userMessage, undefined, pinnedCard);
-          logger.intent('Intent detection result:', intentResult);
+          const functionResult = await IntentDetector.detectIntent(userMessage, undefined, pinnedCard);
+          logger.intent('Function call result:', functionResult);
           
-          if (intentResult.isSearch && intentResult.searchQuery && intentResult.confidence > 0.5) {
-            logger.search('Search intent detected with high confidence, executing search for:', intentResult.searchQuery);
-            // Show temporary status in bottom bar
-            showTempStatus(`🔍 Searching for "${intentResult.searchQuery}"...`, 1500);
+          if (functionResult.intent === 'action' && functionResult.functionCall && functionResult.confidence > 0.5) {
+            const { name: functionName, parameters } = functionResult.functionCall;
             
-            // Update both streaming message and database with search status
-            const searchStatusContent = `🔍 Searching for "${intentResult.searchQuery}"...`;
-            setStreamingMessage(prev => prev ? {
-              ...prev,
-              content: searchStatusContent,
-              isStreaming: false
-            } : null);
-            
-            // Update the database message with search status
-            await ConversationManager.updateMessage(
-              workingConversation.id, 
-              assistantMessage.id, 
-              searchStatusContent
-            );
-            
-            await handleSearchRequest(intentResult.searchQuery, assistantMessage.id);
-            
-            // Get final updated conversation after search completes
-            const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-            if (finalConversation) {
-              onConversationUpdated(finalConversation);
-            }
-            return;
-          } else {
-            logger.chat('No search intent detected or low confidence, continuing with chat. Confidence:', intentResult.confidence);
-            
-            // Check if this is a request to summarize pinned thread
-            if (isPinnedThreadSummaryRequest(userMessage, intentResult, pinnedCard)) {
-              logger.chat('Detected pinned thread summary request');
+            if (functionName === 'get_thread_cards') {
+              logger.search('Search function detected, executing search for:', parameters.keyword_filter);
+              // Show temporary status in bottom bar
+              showTempStatus(`🔍 Searching for "${parameters.keyword_filter}"...`, 1500);
+              
+              // Update both streaming message and database with search status
+              const searchStatusContent = `🔍 Searching for "${parameters.keyword_filter}"...`;
+              setStreamingMessage(prev => prev ? {
+                ...prev,
+                content: searchStatusContent,
+                isStreaming: false
+              } : null);
+              
+              // Update the database message with search status
+              await ConversationManager.updateMessage(
+                workingConversation.id, 
+                assistantMessage.id, 
+                searchStatusContent
+              );
+              
+              await handleSearchRequest(parameters.keyword_filter, assistantMessage.id);
+              
+              // Get final updated conversation after search completes
+              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+              if (finalConversation) {
+                onConversationUpdated(finalConversation);
+              }
+              return;
+              
+            } else if (functionName === 'summarize_pinned_thread') {
+              logger.chat('Pinned thread summary function detected');
               
               const summaryResponse = generatePinnedThreadSummary(pinnedCard);
               
@@ -443,6 +429,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               }
               return;
             }
+          } else {
+            logger.chat('No action function detected or low confidence, continuing with chat. Confidence:', functionResult.confidence);
           }
         } catch (error) {
           logger.error('Intent detection failed:', error);
@@ -481,16 +469,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           logger.model('Model loading complete, now checking for search intent...');
           try {
             showTempStatus('💭 Understanding your request...', 800);
-            const intentResult = await IntentDetector.detectSearchIntent(userMessage, undefined, pinnedCard);
-            logger.intent('Intent detection result:', intentResult);
+            const functionResult = await IntentDetector.detectIntent(userMessage, undefined, pinnedCard);
+            logger.intent('Function call result:', functionResult);
             
-            if (intentResult.isSearch && intentResult.searchQuery && intentResult.confidence > 0.5) {
-              logger.search('Search intent detected with high confidence, executing search for:', intentResult.searchQuery);
+            if (functionResult.intent === 'action' && functionResult.functionCall?.name === 'get_thread_cards' && functionResult.confidence > 0.5) {
+              logger.search('Search intent detected with high confidence, executing search for:', functionResult.functionCall?.parameters.keyword_filter);
               // Show temporary status in bottom bar
-              showTempStatus(`🔍 Searching for "${intentResult.searchQuery}"...`, 1500);
+              showTempStatus(`🔍 Searching for "${functionResult.functionCall?.parameters.keyword_filter}"...`, 1500);
               
               // Update both streaming message and database with search status
-              const searchStatusContent = `🔍 Searching for "${intentResult.searchQuery}"...`;
+              const searchStatusContent = `🔍 Searching for "${functionResult.functionCall?.parameters.keyword_filter}"...`;
               setStreamingMessage(prev => prev ? {
                 ...prev,
                 content: searchStatusContent,
@@ -504,7 +492,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 searchStatusContent
               );
               
-              await handleSearchRequest(intentResult.searchQuery, assistantMessage.id);
+              await handleSearchRequest(functionResult.functionCall?.parameters.keyword_filter, assistantMessage.id);
               
               // Get final updated conversation after search completes
               const finalConversation = await ConversationManager.getConversation(workingConversation.id);
@@ -512,32 +500,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onConversationUpdated(finalConversation);
               }
               return false; // Abort chat
-            } else {
-              logger.chat('No search intent detected or low confidence, continuing with chat. Confidence:', intentResult.confidence);
+            } else if (functionResult.intent === 'action' && functionResult.functionCall?.name === 'summarize_pinned_thread' && functionResult.confidence > 0.5) {
+              logger.chat('Pinned thread summary function detected');
               
-              // Check if this is a request to summarize pinned thread
-              if (isPinnedThreadSummaryRequest(userMessage, intentResult, pinnedCard)) {
-                logger.chat('Detected pinned thread summary request');
-                
-                const summaryResponse = generatePinnedThreadSummary(pinnedCard);
-                
-                // Update the assistant message with the summary
-                await ConversationManager.updateMessage(
-                  workingConversation.id, 
-                  assistantMessage.id, 
-                  summaryResponse
-                );
-                
-                // Clear streaming state
-                setStreamingMessage(null);
-                
-                // Update conversation in UI
-                const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-                if (finalConversation) {
-                  onConversationUpdated(finalConversation);
-                }
-                return false; // Abort chat
+              const summaryResponse = generatePinnedThreadSummary(pinnedCard);
+              
+              // Update the assistant message with the summary
+              await ConversationManager.updateMessage(
+                workingConversation.id, 
+                assistantMessage.id, 
+                summaryResponse
+              );
+              
+              // Clear streaming state
+              setStreamingMessage(null);
+              
+              // Update conversation in UI
+              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+              if (finalConversation) {
+                onConversationUpdated(finalConversation);
               }
+              return false; // Abort chat
+            } else {
+              logger.chat('No action function detected or low confidence, continuing with chat. Confidence:', functionResult.confidence);
             }
           } catch (error) {
             logger.error('Intent detection failed:', error);

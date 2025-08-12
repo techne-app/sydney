@@ -68,38 +68,39 @@ python mlc_llm/eval_intent_detection.py --export-results results.json
 
 ## Model Evaluation Results
 
-### Latest Evaluation (138 Test Cases)
+### Latest Evaluation (158 Test Cases, 10 Iterations)
 
 | Model | Size (MB) | Accuracy | Avg Time (s) | Production Ready | 
 |-------|-----------|----------|--------------|------------------|
-| 🥇 **Phi-3.5-mini-instruct** | 2,052.0 | **87.7%** | 2.839 | ✅ **EXCELLENT** |
-| 🥈 **Llama-3.2-3B-Instruct** | 1,732.5 | **87.4%** | 1.399 | ✅ **EXCELLENT** |
-| 🥉 **Gemma-2-2B-it** | 1,419.7 | **76.1%** | 1.697 | ⚠️ **ACCEPTABLE** |
+| **Llama-3.2-3B-Instruct** | 1,732.5 | **84.1%** | 0.729 | ✅ **GOOD** |
+| **Phi-3.5-mini-instruct** | 2,052.0 | **79.1%** | 2.044 | ⚠️ **ACCEPTABLE** |
+| **Gemma-2-2B-it** | 1,419.7 | **78.2%** | 1.958 | ⚠️ **ACCEPTABLE** |
 
 ### Performance Summary 📊
 
-**Best Accuracy**: 87.7% (Phi-3.5-mini-instruct)
+**Best Accuracy**: 84.1% (Llama-3.2-3B-Instruct)
 **Smallest Model**: 1,419.7 MB (Gemma-2-2B-it)  
-**Fastest Inference**: 1.399s (Llama-3.2-3B-Instruct)
+**Fastest Inference**: 0.729s (Llama-3.2-3B-Instruct)
 
 ### Key Findings & Recommendations 💡
 
-#### 🏆 Phi-3.5-mini-instruct (BEST OVERALL)
-- **Highest accuracy** at 87.7% - best intent detection performance
-- **Consistent results** across multiple evaluation runs
-- **Production ready** - excellent for applications requiring high accuracy
-- **Trade-off**: Slower inference at 2.839s average response time
+#### 🏆 Llama-3.2-3B-Instruct (BEST OVERALL)
+- **Highest accuracy** at 84.1% - best intent detection performance
+- **Fastest inference** at 0.729s - 3x faster than Phi-3.5
+- **Smaller footprint** at 1,732.5 MB vs 2,052.0 MB  
+- **Clear winner** across all metrics - speed, size, and accuracy
+- **Production ready** - excellent balance for real-world usage
 
-#### ⚡ Llama-3.2-3B-Instruct (FASTEST)
-- **Excellent accuracy** at 87.4% - nearly matches Phi-3.5
-- **Fastest inference** at 1.399s - 2x faster than Phi-3.5
-- **Smaller footprint** at 1,732.5 MB vs 2,052.0 MB
-- **Best balance** of speed, size, and accuracy
+#### 🔬 Phi-3.5-mini-instruct (LARGER, SLOWER)
+- **Lower accuracy** at 79.1% - underperforms compared to Llama
+- **Slowest inference** at 2.044s - significant latency impact
+- **Largest model** at 2,052.0 MB - higher resource requirements
+- **Previous leader** but now outclassed by Llama-3.2-3B
 
 #### 📱 Gemma-2-2B-it (MOST EFFICIENT)
 - **Smallest model** at 1,419.7 MB - best for resource-constrained environments
-- **Acceptable accuracy** at 76.1% - suitable for non-critical applications
-- **Good performance** for a compact model
+- **Competitive accuracy** at 78.2% - surprisingly close to Phi-3.5
+- **Good performance** for a compact model - viable alternative for limited resources
 
 ## Test Dataset Structure (BFCL Format)
 
@@ -113,7 +114,7 @@ The evaluation system now uses **BFCL (Berkeley Function Calling Leaderboard) co
     "description": "Intent detection test cases using real get_thread_cards API for MCP evaluation",
     "version": "1.0.0",
     "format": "Berkeley Function Calling Leaderboard (BFCL) compatible",
-    "total_cases": 138,
+    "total_cases": 158,
     "evaluation_phases": {
       "intent_classification": "Phase 1: chat vs action (binary classification)",
       "function_calling": "Phase 2: function selection and parameter extraction (action cases only)"
@@ -370,10 +371,9 @@ The evaluation script requires the actual prompt from the TypeScript source:
 ### Current Extension Settings
 ```typescript
 // src/config.ts
-DEFAULT_MODEL: "Llama-3.2-3B-Instruct-q4f16_1-MLC"  // UPDATE RECOMMENDED
+DEFAULT_MODEL: "Llama-3.2-3B-Instruct-q4f16_1-MLC"  // ✅ OPTIMAL CHOICE
 
-// Recommended update:
-DEFAULT_MODEL: "Phi-3.5-mini-instruct-q4f16_1-MLC"
+// Current setting is already optimal based on latest evaluation results
 ```
 
 ### Model Parameters

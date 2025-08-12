@@ -96,8 +96,8 @@
       "slang_search": 1
     },
     "intents": {
-      "chat": 56,
-      "action": 82
+      "chat": 41,
+      "action": 97
     }
   },
   "functions": {
@@ -159,6 +159,39 @@
         "required": [
           "keyword_filter"
         ]
+      }
+    },
+    "summarize_pinned_thread": {
+      "name": "summarize_pinned_thread",
+      "description": "Summarize the currently pinned thread discussion",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "bullet_points",
+              "paragraph",
+              "key_insights",
+              "brief"
+            ],
+            "description": "Format for the summary output",
+            "default": "paragraph"
+          },
+          "focus": {
+            "type": "string",
+            "enum": [
+              "main_points",
+              "arguments",
+              "technical_details",
+              "opinions",
+              "all"
+            ],
+            "description": "What aspects to focus on in the summary",
+            "default": "main_points"
+          }
+        },
+        "required": []
       }
     },
     "no_action": {
@@ -6712,292 +6745,352 @@
       ]
     },
     {
-      "id": "chat_pinned_001",
+      "id": "action_pinned_001",
       "question": "summarize this thread",
       "category": "pinned_thread_summary",
       "difficulty": "easy",
       "context_pinned": true,
       "notes": "Basic pinned thread summarization request",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_002",
+      "id": "action_pinned_002",
       "question": "can you summarize the discussion?",
       "category": "pinned_thread_summary",
       "difficulty": "easy", 
       "context_pinned": true,
       "notes": "Polite pinned thread summarization request",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_003",
+      "id": "action_pinned_003",
       "question": "give me a summary of this thread",
       "category": "pinned_thread_summary",
       "difficulty": "easy",
       "context_pinned": true,
       "notes": "Direct pinned thread summary request",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_004",
+      "id": "action_pinned_004",
       "question": "what's this thread about?",
       "category": "pinned_thread_summary",
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Question form of pinned thread summary request",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_005",
+      "id": "action_pinned_005",
       "question": "tell me about this discussion",
       "category": "pinned_thread_summary",
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Tell me about form of pinned thread request",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_006",
+      "id": "action_pinned_006",
       "question": "break down this thread for me",
       "category": "pinned_thread_summary",
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Break down request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_007",
+      "id": "action_pinned_007",
       "question": "explain this thread to me",
       "category": "pinned_thread_summary",
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Explanation request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_008",
+      "id": "action_pinned_008",
       "question": "what are the key points here?",
       "category": "pinned_thread_summary",
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Key points request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_009",
+      "id": "action_pinned_009",
       "question": "give me the gist of this",
       "category": "pinned_thread_summary",
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Gist request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
     {
-      "id": "chat_pinned_010",
+      "id": "action_pinned_010",
       "question": "what's the main argument in this discussion?",
       "category": "pinned_thread_summary",
       "difficulty": "hard",
       "context_pinned": true,
       "notes": "Main argument request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
@@ -7008,25 +7101,31 @@
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "More detail request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
@@ -7037,25 +7136,31 @@
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Elaboration request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
@@ -7066,25 +7171,31 @@
       "difficulty": "hard",
       "context_pinned": true,
       "notes": "People's opinions request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
@@ -7095,25 +7206,31 @@
       "difficulty": "hard",
       "context_pinned": true,
       "notes": "Deep dive request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
@@ -7124,25 +7241,31 @@
       "difficulty": "medium",
       "context_pinned": true,
       "notes": "Expansion request for pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
-          "name": "no_action",
-          "description": "No action required - conversational response",
+          "name": "summarize_pinned_thread",
+          "description": "Summarize the currently pinned thread discussion",
           "parameters": {
             "type": "object",
             "properties": {
-              "response_type": {
+              "format": {
                 "type": "string",
-                "enum": ["greeting", "opinion", "explanation", "social", "pinned_summary"]
+                "enum": ["bullet_points", "paragraph", "key_insights", "brief"],
+                "default": "paragraph"
+              },
+              "focus": {
+                "type": "string",
+                "enum": ["main_points", "arguments", "technical_details", "opinions", "all"],
+                "default": "main_points"
               }
             },
-            "required": ["response_type"]
+            "required": []
           }
         }
       ],
-      "expected_function_call": "no_action(response_type=\"pinned_summary\")",
+      "expected_function_call": "summarize_pinned_thread()",
       "valid_alternatives": [],
       "evaluation_phases": ["intent_classification"]
     },
@@ -7153,8 +7276,8 @@
       "difficulty": "medium",
       "context_pinned": false,
       "notes": "Summary request with no pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
           "name": "no_action",
@@ -7182,8 +7305,8 @@
       "difficulty": "medium",
       "context_pinned": false,
       "notes": "Thread info request with no pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
           "name": "no_action",
@@ -7211,8 +7334,8 @@
       "difficulty": "hard",
       "context_pinned": false,
       "notes": "Discussion question with no pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
           "name": "no_action",
@@ -7240,8 +7363,8 @@
       "difficulty": "medium",
       "context_pinned": false,
       "notes": "Gist request with no pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
           "name": "no_action",
@@ -7269,8 +7392,8 @@
       "difficulty": "medium",
       "context_pinned": false,
       "notes": "Breakdown request with no pinned thread",
-      "intent_expected": "chat",
-      "action_type_expected": "no_action",
+      "intent_expected": "action",
+      "action_type_expected": "summarize_pinned_thread",
       "function": [
         {
           "name": "no_action",

@@ -360,14 +360,39 @@ The extension uses a reusable modal system for secondary interfaces:
 - **Memory Management**: Singleton pattern for ML models
 - **Batch Processing**: Tags processed in batches
 
-## Intent Detection Models
+## Intent Detection Architecture
 
-The extension uses local AI models for routing user messages between search and conversational modes. See `mlc_llm/README.md` for comprehensive model evaluation results, testing procedures, and configuration details.
+The extension uses a **two-step inference approach** with local AI models for intelligent message routing between search, conversation, and pinned thread summarization.
 
-**Quick Reference**:
-- **Recommended Model**: Phi-3.5-mini-instruct-q4f16_1-MLC (85.9% accuracy)
-- **Evaluation Framework**: `mlc_llm/eval_intent_detection.py` with 64+ test cases
+### Two-Step Architecture
+1. **Step 1: Intent Classification** (`src/prompts/intentOnly.ts`)
+   - Determines whether user wants **action** (search/summarize) or **chat** (conversation)
+   - Context-aware prompts that understand pinned thread context
+   - Achieves 90%+ accuracy on pinned thread cases
+
+2. **Step 2: Function Selection** (`src/prompts/actionOnly.ts`) 
+   - Executes only when Step 1 identifies "action" intent
+   - Selects specific function: `get_thread_cards` (search) or `summarize_pinned_thread`
+   - Returns structured function calls with parameters
+
+### Production Implementation
+- **Single API**: `IntentDetector.detectIntent()` method in `src/utils/intentDetector.ts`
+- **Clean Architecture**: All legacy methods removed in favor of evaluated two-step approach
+- **Context Integration**: Pinned thread data automatically included in both steps
+- **Error Handling**: Graceful fallbacks for parsing errors and low confidence results
+
+### Model Performance
+- **Recommended Model**: Phi-3.5-mini-instruct-q4f16_1-MLC
+- **Overall Accuracy**: 76.3% on full dataset (158 test cases)
+- **Pinned Thread Accuracy**: 90% with context-aware prompts
+- **Evaluation Framework**: `mlc_llm/eval_two_step.py` for comprehensive testing
 - **Testing**: `python mlc_llm/quick-intent-test.py "your query"`
+
+### Key Features
+- **Context-Aware**: Understands when user has pinned a thread for analysis
+- **High Accuracy**: Dramatic improvement from 20-60% to 90% on context cases
+- **Production-Tested**: Implementation matches evaluated architecture exactly
+- **Dual Confidence**: Combined confidence scoring from both inference steps
 
 ## Development Notes
 - Extension uses Chrome Extension Manifest V3

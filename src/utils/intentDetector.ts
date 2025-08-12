@@ -1,12 +1,18 @@
 import { webLLMClient } from './webLLMClient';
 import { configStore } from './configStore';
 import { logger } from './logger';
-import { SEARCH_INTENT_PROMPT } from '../prompts/searchIntent';
+import { INTENT_ONLY_PROMPT } from '../prompts/intentOnly';
+import { ACTION_ONLY_PROMPT } from '../prompts/actionOnly';
 import { ThreadCardData } from '../types/chat';
 
-export interface IntentDetectionResult {
-  isSearch: boolean;
-  searchQuery?: string;
+export interface FunctionCall {
+  name: string;
+  parameters: Record<string, any>;
+}
+
+export interface FunctionCallingResult {
+  intent: 'action' | 'chat';
+  functionCall?: FunctionCall;
   confidence: number;
   reasoning?: string;
 }
@@ -16,40 +22,95 @@ export interface IntentDetectionCallbacks {
   onModelProgress?: (progress: number, text: string) => void;
 }
 
+/**
+ * Clean two-step intent detection using context-aware prompts.
+ * 
+ * Step 1: Intent classification (action vs chat)
+ * Step 2: Function selection (when intent = action)
+ * 
+ * This implementation matches the evaluated approach that achieved 76.3% accuracy.
+ */
 export class IntentDetector {
   /**
-   * Detect if a message contains search intent using LLM
+   * Main intent detection method using two-step inference.
+   * This is the only public API - all other approaches have been removed.
+   * 
    * @param message - User message to analyze
    * @param callbacks - Optional callbacks for loading state
    * @param pinnedThread - Optional pinned thread context
-   * @returns Promise<IntentDetectionResult>
+   * @returns Promise<FunctionCallingResult>
    */
-  static async detectSearchIntent(
-    message: string, 
+  static async detectIntent(
+    message: string,
     callbacks?: IntentDetectionCallbacks,
     pinnedThread?: ThreadCardData | null
-  ): Promise<IntentDetectionResult> {
-    logger.model('Starting intent detection for message:', message);
-    const prompt = this.buildIntentDetectionPrompt(message, pinnedThread);
-    logger.debug('Built intent detection prompt');
-    const response = await this.queryLLM(prompt, callbacks);
-    logger.debug('Raw LLM response:', response);
-    const result = this.parseIntentResponse(response);
-    logger.intent('Parsed intent result:', result);
-    return result;
+  ): Promise<FunctionCallingResult> {
+    logger.model('Starting two-step intent detection for message:', message);
+    
+    // Step 1: Intent detection (action vs chat)
+    const intentResult = await this._detectIntentOnly(message, callbacks, pinnedThread);
+    logger.intent('Step 1 - Intent detection result:', intentResult);
+    
+    if (intentResult.intent === 'chat') {
+      // For chat intent, return no_action function call
+      return {
+        intent: 'chat',
+        functionCall: {
+          name: 'no_action',
+          parameters: { response_type: 'explanation' }
+        },
+        confidence: intentResult.confidence,
+        reasoning: intentResult.reasoning || 'Classified as conversational'
+      };
+    }
+    
+    // Step 2: Select function for action intent
+    const actionResult = await this._detectActionOnly(message, callbacks, pinnedThread);
+    logger.intent('Step 2 - Action selection result:', actionResult);
+    
+    return {
+      intent: 'action',
+      functionCall: actionResult.functionCall,
+      confidence: Math.min(intentResult.confidence, actionResult.confidence), // Take minimum confidence
+      reasoning: `Intent: ${intentResult.reasoning || 'action'}; Function: ${actionResult.reasoning || 'selected'}`
+    };
   }
 
   /**
-   * Build prompt for intent detection with optional pinned thread context
-   * @param message - User message
-   * @param pinnedThread - Optional pinned thread data
-   * @returns formatted prompt
+   * Step 1: Detect intent only (action vs chat)
+   * @private - Internal method for two-step process
    */
-  private static buildIntentDetectionPrompt(message: string, pinnedThread?: ThreadCardData | null): string {
-    let contextInfo = '';
-    
+  private static async _detectIntentOnly(
+    message: string,
+    callbacks?: IntentDetectionCallbacks,
+    pinnedThread?: ThreadCardData | null
+  ): Promise<{ intent: 'action' | 'chat'; confidence: number; reasoning?: string }> {
+    const prompt = this._buildIntentOnlyPrompt(message, pinnedThread);
+    const response = await this._queryLLM(prompt, callbacks);
+    return this._parseIntentOnlyResponse(response);
+  }
+
+  /**
+   * Step 2: Select function for action intent (chat is not an option)
+   * @private - Internal method for two-step process
+   */
+  private static async _detectActionOnly(
+    message: string,
+    callbacks?: IntentDetectionCallbacks,
+    pinnedThread?: ThreadCardData | null
+  ): Promise<{ functionCall: FunctionCall; confidence: number; reasoning?: string }> {
+    const prompt = this._buildActionOnlyPrompt(message, pinnedThread);
+    const response = await this._queryLLM(prompt, callbacks);
+    return this._parseActionOnlyResponse(response);
+  }
+
+  /**
+   * Build consistent context string for all prompts
+   * @private - Internal utility method
+   */
+  private static _buildContextString(pinnedThread?: ThreadCardData | null): string {
     if (pinnedThread) {
-      contextInfo = `Context: User has pinned this thread:
+      return `Context: User has pinned this thread:
 - Title: "${pinnedThread.story_title}"
 - Theme: "${pinnedThread.theme}"
 - Category: "${pinnedThread.category}"
@@ -58,21 +119,35 @@ export class IntentDetector {
 
 `;
     } else {
-      contextInfo = `Context: No thread currently pinned.
+      return `Context: No thread currently pinned.
 
 `;
     }
-    
-    return contextInfo + SEARCH_INTENT_PROMPT.replace('{message}', message);
+  }
+
+  /**
+   * Build prompt for intent-only detection
+   * @private - Internal method
+   */
+  private static _buildIntentOnlyPrompt(message: string, pinnedThread?: ThreadCardData | null): string {
+    const contextInfo = this._buildContextString(pinnedThread);
+    return INTENT_ONLY_PROMPT.replace('{context}', contextInfo).replace('{message}', message);
+  }
+
+  /**
+   * Build prompt for action-only function selection
+   * @private - Internal method
+   */
+  private static _buildActionOnlyPrompt(message: string, pinnedThread?: ThreadCardData | null): string {
+    const contextInfo = this._buildContextString(pinnedThread);
+    return ACTION_ONLY_PROMPT.replace('{context}', contextInfo).replace('{message}', message);
   }
 
   /**
    * Query LLM for intent detection
-   * @param prompt - Intent detection prompt
-   * @param callbacks - Optional callbacks for loading state
-   * @returns LLM response
+   * @private - Internal method
    */
-  private static async queryLLM(prompt: string, callbacks?: IntentDetectionCallbacks): Promise<string> {
+  private static async _queryLLM(prompt: string, callbacks?: IntentDetectionCallbacks): Promise<string> {
     const config = await configStore.getConfig();
     
     return new Promise((resolve, reject) => {
@@ -95,7 +170,7 @@ export class IntentDetector {
           if (chunk && (chunk.includes('Loading') || chunk.includes('Initializing') || chunk.includes('%'))) {
             callbacks?.onModelProgress?.(0, chunk);
             // Try to extract progress percentage
-            const progressMatch = chunk.match(/(\d+)%/);
+            const progressMatch = chunk.match(/(\\d+)%/);
             if (progressMatch) {
               callbacks?.onModelProgress?.(parseInt(progressMatch[1]) / 100, chunk);
             }
@@ -117,11 +192,10 @@ export class IntentDetector {
   }
 
   /**
-   * Parse LLM response for intent detection
-   * @param response - Raw LLM response
-   * @returns IntentDetectionResult
+   * Parse LLM response for intent-only detection
+   * @private - Internal method
    */
-  private static parseIntentResponse(response: string): IntentDetectionResult {
+  private static _parseIntentOnlyResponse(response: string): { intent: 'action' | 'chat'; confidence: number; reasoning?: string } {
     try {
       // Extract JSON from response (in case there's extra text)
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -132,8 +206,8 @@ export class IntentDetector {
       const parsed = JSON.parse(jsonMatch[0]);
       
       // Validate required fields
-      if (typeof parsed.isSearch !== 'boolean') {
-        throw new Error('Invalid isSearch field');
+      if (!parsed.intent || !['action', 'chat'].includes(parsed.intent)) {
+        throw new Error('Invalid intent field');
       }
       
       if (typeof parsed.confidence !== 'number' || parsed.confidence < 0 || parsed.confidence > 1) {
@@ -141,23 +215,67 @@ export class IntentDetector {
       }
 
       return {
-        isSearch: parsed.isSearch,
-        searchQuery: parsed.searchQuery || undefined,
+        intent: parsed.intent,
         confidence: parsed.confidence,
         reasoning: parsed.reasoning || undefined
       };
     } catch (error) {
-      logger.error('Error parsing intent response:', error);
+      logger.error('Error parsing intent-only response:', error);
       
       // Return fallback result
       return {
-        isSearch: false,
+        intent: 'chat',
         confidence: 0.0,
         reasoning: 'Failed to parse LLM response'
       };
     }
   }
 
+  /**
+   * Parse LLM response for action-only function selection
+   * @private - Internal method
+   */
+  private static _parseActionOnlyResponse(response: string): { functionCall: FunctionCall; confidence: number; reasoning?: string } {
+    try {
+      // Extract JSON from response (in case there's extra text)
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('No JSON found in response');
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      
+      // Validate required fields
+      if (!parsed.function || typeof parsed.function !== 'string') {
+        throw new Error('Invalid function field');
+      }
+      
+      if (typeof parsed.confidence !== 'number' || parsed.confidence < 0 || parsed.confidence > 1) {
+        throw new Error('Invalid confidence field');
+      }
+
+      return {
+        functionCall: {
+          name: parsed.function,
+          parameters: parsed.parameters || {}
+        },
+        confidence: parsed.confidence,
+        reasoning: parsed.reasoning || undefined
+      };
+    } catch (error) {
+      logger.error('Error parsing action-only response:', error);
+      
+      // Return fallback result
+      return {
+        functionCall: {
+          name: 'get_thread_cards',
+          parameters: { keyword_filter: 'general discussion' }
+        },
+        confidence: 0.0,
+        reasoning: 'Failed to parse LLM response, fallback to search'
+      };
+    }
+  }
 
   /**
    * Check if intent detection is available
