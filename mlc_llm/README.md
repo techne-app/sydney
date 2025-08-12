@@ -4,22 +4,29 @@ This directory contains tools for evaluating and testing intent detection models
 
 ## Overview
 
-The intent detection system uses a **two-phase classification approach** to route user requests in the chat interface:
+The intent detection system uses a **two-step classification approach** to route user requests in the chat interface:
 
-### Phase 1: Chat vs Action Classification
-Determines whether user messages are asking for **CONVERSATIONAL** responses or want the system to **DO SOMETHING** (take action).
+### Step 1: Intent Classification
+Determines whether user messages are asking for **CONVERSATIONAL** responses or want the system to **TAKE ACTION**.
 
 - **chat**: User wants conversation, explanations, opinions, advice, or general discussion
 - **action**: User wants the system to perform an action - search, find, retrieve, create, analyze, etc.
 
-### Phase 2: Function Calling (Action Cases Only)
+### Step 2: Function Calling (Action Cases Only)
 For messages classified as "action", determines which specific function to call and extracts parameters:
 
 - **get_thread_cards**: Find, show, retrieve, discover HN content/discussions using real backend API
-- **create_summary**: Generate summaries of discussion threads (future) 
-- **analyze_trends**: Analyze trends, compare, synthesize information (future)
+- **summarize_pinned_thread**: Generate summaries of pinned discussion threads
+- **no_action**: Fallback for conversational responses
 
-This two-phase approach is **extensible and MCP-ready** - new functions can be added without retraining Phase 1, and the architecture naturally maps to tool calling patterns for MCP server integration.
+### Two-Step Evaluation Methodology
+The evaluation system separately measures performance at each step:
+
+- **Step 1 Accuracy**: Percentage of test cases where intent classification (chat vs action) is correct
+- **Step 2 Accuracy**: Percentage of action cases where function calling and parameter extraction is correct  
+- **Overall Accuracy**: Combined accuracy across both steps - a test case must pass both steps to be considered correct
+
+This approach provides granular insights into model performance and identifies whether failures occur during intent detection or function calling. It's **extensible and MCP-ready** - new functions can be added without retraining Step 1, and the architecture naturally maps to tool calling patterns for MCP server integration.
 
 ## Scripts
 
@@ -45,62 +52,70 @@ python mlc_llm/model_wrapper.py --quiet
 
 The smoke test validates basic model functionality by testing 4 representative queries (2 action, 2 chat) and verifies that the model loads correctly, produces valid JSON responses, and achieves reasonable accuracy on simple cases. It's designed as a quick sanity check before running full evaluations.
 
-### `eval_intent_detection.py`
-Comprehensive evaluation framework using BFCL (Berkeley Function Calling Leaderboard) format natively.
+### `eval_two_step.py`
+Comprehensive two-step evaluation framework that separately evaluates intent classification (Step 1) and function calling (Step 2).
 
 ```bash
-# Full evaluation with default model
-python mlc_llm/eval_intent_detection.py --full-eval
+# Full evaluation with default settings (5 iterations)
+uv run python mlc_llm/eval_two_step.py
 
-# Compare two models
-python mlc_llm/eval_intent_detection.py --compare "Phi-3.5-mini-instruct-q4f16_1-MLC" "Llama-3.2-3B-Instruct-q4f16_1-MLC"
+# Extended evaluation (10 iterations for more stable results)
+uv run python mlc_llm/eval_two_step.py --iterations 10
 
-# Test specific dataset categories
-python mlc_llm/eval_intent_detection.py --dataset explicit_search
-python mlc_llm/eval_intent_detection.py --dataset ambiguous
+# Quiet mode (less verbose output)
+uv run python mlc_llm/eval_two_step.py --iterations 10 --quiet
 
-# Failure analysis
-python mlc_llm/eval_intent_detection.py --analyze-failures
+# Test specific models
+uv run python mlc_llm/eval_two_step.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
 
-# Export results
-python mlc_llm/eval_intent_detection.py --export-results results.json
+# Compare multiple models (automatically detected from models/ directory)
+uv run python mlc_llm/eval_two_step.py --iterations 10 --quiet
 ```
 
 ## Model Evaluation Results
 
-### Latest Evaluation (158 Test Cases, 10 Iterations)
+### Latest Two-Step Evaluation (158 Test Cases, 10 Iterations)
 
-| Model | Size (MB) | Accuracy | Avg Time (s) | Production Ready | 
-|-------|-----------|----------|--------------|------------------|
-| **Llama-3.2-3B-Instruct** | 1,732.5 | **84.1%** | 0.729 | ✅ **GOOD** |
-| **Phi-3.5-mini-instruct** | 2,052.0 | **79.1%** | 2.044 | ⚠️ **ACCEPTABLE** |
-| **Gemma-2-2B-it** | 1,419.7 | **78.2%** | 1.958 | ⚠️ **ACCEPTABLE** |
+🏆 **TWO-STEP MODEL COMPARISON TABLE**
+========================================================================================================================
+| Model                     | Size (MB) | Step1 Acc | Step2 Acc | Overall | Step1 Time | Step2 Time | Status         |
+|---------------------------|-----------|-----------|-----------|---------|------------|------------|----------------|
+| **Phi-3.5-mini-instruct** | 2,052    | **81.7%** | **87.2%** | **77.3%** | 1.675s     | 3.215s     | ⚠️ **ACCEPTABLE** |
+| **gemma-2-2b-it**         | 1,420    | 79.7%     | 69.8%     | 73.4%   | 1.073s     | 1.768s     | ❌ **POOR**       |
+| **Llama-3.2-3B-Instruct** | 1,733    | 71.1%     | 75.2%     | 70.8%   | 0.772s     | 1.695s     | ❌ **POOR**       |
 
-### Performance Summary 📊
+### 📈 Two-Step Performance Summary
 
-**Best Accuracy**: 84.1% (Llama-3.2-3B-Instruct)
-**Smallest Model**: 1,419.7 MB (Gemma-2-2B-it)  
-**Fastest Inference**: 0.729s (Llama-3.2-3B-Instruct)
+- **Best Step 1 Accuracy**: 81.7% (Phi-3.5-mini-instruct)
+- **Best Step 2 Accuracy**: 87.2% (Phi-3.5-mini-instruct) 
+- **Best Overall Accuracy**: 77.3% (Phi-3.5-mini-instruct)
+- **Average Step 1**: 77.5%
+- **Average Step 2**: 77.4%
+- **Average Overall**: 73.8%
 
-### Key Findings & Recommendations 💡
+### 💡 Key Findings & Recommendations
 
-#### 🏆 Llama-3.2-3B-Instruct (BEST OVERALL)
-- **Highest accuracy** at 84.1% - best intent detection performance
-- **Fastest inference** at 0.729s - 3x faster than Phi-3.5
-- **Smaller footprint** at 1,732.5 MB vs 2,052.0 MB  
-- **Clear winner** across all metrics - speed, size, and accuracy
-- **Production ready** - excellent balance for real-world usage
+#### 🏆 Phi-3.5-mini-instruct (BEST OVERALL)
+- **Highest overall accuracy** at 77.3% - best combined two-step performance
+- **Excellent Step 1 (Intent)** at 81.7% - best at distinguishing chat vs action
+- **Outstanding Step 2 (Function)** at 87.2% - superior function calling accuracy
+- **Larger model** at 2,052 MB but justified by superior accuracy
+- **Slower inference** but provides the most reliable intent detection
+- **Production recommended** - clear leader for two-step evaluation
 
-#### 🔬 Phi-3.5-mini-instruct (LARGER, SLOWER)
-- **Lower accuracy** at 79.1% - underperforms compared to Llama
-- **Slowest inference** at 2.044s - significant latency impact
-- **Largest model** at 2,052.0 MB - higher resource requirements
-- **Previous leader** but now outclassed by Llama-3.2-3B
+#### 🔬 gemma-2-2b-it (COMPACT BUT INCONSISTENT)
+- **Smallest model** at 1,420 MB - best resource efficiency
+- **Good Step 1 performance** at 79.7% - decent intent classification
+- **Poor Step 2 performance** at 69.8% - struggles with function calling
+- **Fastest total time** but inconsistent accuracy across steps
+- **Not recommended** - unreliable for production use
 
-#### 📱 Gemma-2-2B-it (MOST EFFICIENT)
-- **Smallest model** at 1,419.7 MB - best for resource-constrained environments
-- **Competitive accuracy** at 78.2% - surprisingly close to Phi-3.5
-- **Good performance** for a compact model - viable alternative for limited resources
+#### 📱 Llama-3.2-3B-Instruct (UNDERPERFORMING)
+- **Previously strong single-step** but struggles with two-step approach
+- **Weak Step 1** at 71.1% - poor intent classification
+- **Mediocre Step 2** at 75.2% - average function calling
+- **Fast inference** but accuracy too low for reliable production use
+- **Not recommended** - significant accuracy regression in two-step evaluation
 
 ## Test Dataset Structure (BFCL Format)
 
@@ -285,16 +300,17 @@ Create specialized test case categories:
 ### Intent Detection Flow
 1. User message received in chat interface
 2. Message sent to `IntentDetector.detectIntent()`
-3. Local LLM processes message with `SEARCH_INTENT_PROMPT`
-4. JSON response parsed for `isSearch`, `searchQuery`, `confidence`
-5. Router directs to search service or conversational AI
+3. **Step 1**: Local LLM processes message with intent classification prompt
+4. **Step 2**: If action detected, second LLM call for function selection and parameter extraction
+5. JSON responses parsed for intent, function calls, and confidence scores
+6. Router directs to appropriate service (search, chat, or function execution)
 
 ### Prompt Engineering
-The shared prompt (`src/prompts/searchIntent.ts`) includes:
-- **Clear intent definitions** with examples
-- **Social interaction patterns** for chat classification  
-- **Ambiguous case handling** with confidence scores
-- **Structured JSON output** specification
+The two-step system uses separate prompts:
+- **Step 1 Prompt** (`src/prompts/intentOnly.ts`): Intent classification with clear examples
+- **Step 2 Prompt** (`src/prompts/actionOnly.ts`): Function calling with parameter extraction
+- **Context awareness** for pinned thread scenarios
+- **Structured JSON output** specification for both steps
 
 ## Prerequisites
 
@@ -361,19 +377,20 @@ cd ..
 ```
 
 ### TypeScript Prompt Requirement
-The evaluation script requires the actual prompt from the TypeScript source:
-- Must have `src/prompts/searchIntent.ts` with `SEARCH_INTENT_PROMPT`
-- No fallback prompts - script exits if prompt cannot be loaded
-- Ensures evaluation uses identical prompt as production system
+The evaluation script requires the actual prompts from the TypeScript source:
+- Must have `src/prompts/intentOnly.ts` with intent classification prompt
+- Must have `src/prompts/actionOnly.ts` with function calling prompt  
+- No fallback prompts - script exits if prompts cannot be loaded
+- Ensures evaluation uses identical prompts as production system
 
 ## Production Configuration
 
 ### Current Extension Settings
 ```typescript
 // src/config.ts
-DEFAULT_MODEL: "Llama-3.2-3B-Instruct-q4f16_1-MLC"  // ✅ OPTIMAL CHOICE
+DEFAULT_MODEL: "Phi-3.5-mini-instruct-q4f16_1-MLC"  // ✅ OPTIMAL CHOICE
 
-// Current setting is already optimal based on latest evaluation results
+// Updated based on two-step evaluation results - best overall accuracy (77.3%)
 ```
 
 ### Model Parameters
@@ -393,9 +410,9 @@ stream: false           // Synchronous for intent detection
 
 ### Model Updates
 1. Download new model to `models/` directory
-2. Run smoke test with `python mlc_llm/model_wrapper.py --model <model-name>`
-3. Run full evaluation with `eval_intent_detection.py`
-4. Update configuration if performance improves
+2. Run smoke test with `uv run python mlc_llm/model_wrapper.py --model <model-name>`
+3. Run full two-step evaluation with `uv run python mlc_llm/eval_two_step.py --iterations 10 --quiet`
+4. Update configuration if overall accuracy improves
 
 ### Expanding Evaluation Framework
 1. Define new functions in BFCL format
