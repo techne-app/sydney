@@ -268,7 +268,7 @@ export class IntentDetector {
       // Return fallback result
       return {
         functionCall: {
-          name: 'get_thread_cards',
+          name: 'search_threads',
           parameters: { keyword_filter: 'general discussion' }
         },
         confidence: 0.0,

@@ -48,7 +48,7 @@ describe('IntentDetector', () => {
     });
 
     test('correctly handles action intent with search function (single step)', async () => {
-      const singleStepResponse = '{"intent": "action", "function": "get_thread_cards", "confidence": 0.8, "reasoning": "Search for discussions", "parameters": {"keyword_filter": "AI"}}';
+      const singleStepResponse = '{"intent": "action", "function": "search_threads", "confidence": 0.8, "reasoning": "Search for discussions", "parameters": {"keyword_filter": "AI"}}';
       
       mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
         setTimeout(() => onFinish?.(singleStepResponse), 0);
@@ -60,7 +60,7 @@ describe('IntentDetector', () => {
       expect(result).toEqual({
         intent: 'action',
         functionCall: {
-          name: 'get_thread_cards',
+          name: 'search_threads',
           parameters: { keyword_filter: 'AI' }
         },
         confidence: 0.8,
@@ -104,7 +104,7 @@ describe('IntentDetector', () => {
     });
 
     test('calls webLLMClient with correct parameters for single step', async () => {
-      const singleStepResponse = '{"intent": "action", "function": "get_thread_cards", "confidence": 0.8}';
+      const singleStepResponse = '{"intent": "action", "function": "search_threads", "confidence": 0.8}';
       
       mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
         setTimeout(() => onFinish?.(singleStepResponse), 0);

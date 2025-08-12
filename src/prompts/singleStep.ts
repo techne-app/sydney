@@ -33,12 +33,12 @@ Your job is to analyze the user message and determine:
 - Examples: "summarize this thread", "what's this about?", "explain this discussion", "key points?"
   
 **When there is NO pinned thread** (context says "No thread currently pinned"):
-- Requests about "this thread" are ACTION but use get_thread_cards for general search
-- General summarization requests without specific content use get_thread_cards
+- Requests about "this thread" are ACTION but use search_threads for general search
+- General summarization requests without specific content use search_threads
 
 ## Available Functions (for ACTION intent):
 
-### get_thread_cards - Search and retrieve Hacker News discussion threads
+### search_threads - Search and retrieve Hacker News discussion threads
 Parameters:
 - keyword_filter (required): Text to filter discussions by content relevance
 - hours_back (optional): Hours to look back from current time (default: 168) 
@@ -61,11 +61,11 @@ Parameters:
 - "what do you think about AI?" → {"intent": "chat", "confidence": 0.9, "reasoning": "asking for opinions"}
 
 **ACTION responses:**
-- "find discussions about AI" → {"intent": "action", "function": "get_thread_cards", "parameters": {"keyword_filter": "AI"}, "confidence": 0.9, "reasoning": "clear search request"}
-- "show me recent React posts" → {"intent": "action", "function": "get_thread_cards", "parameters": {"keyword_filter": "React", "sort_by": "recent"}, "confidence": 0.9, "reasoning": "search with sorting preference"}
-- "find 5 startup discussions from this week" → {"intent": "action", "function": "get_thread_cards", "parameters": {"keyword_filter": "startup", "num_cards": 5, "hours_back": 168}, "confidence": 0.9, "reasoning": "specific search with constraints"}
+- "find discussions about AI" → {"intent": "action", "function": "search_threads", "parameters": {"keyword_filter": "AI"}, "confidence": 0.9, "reasoning": "clear search request"}
+- "show me recent React posts" → {"intent": "action", "function": "search_threads", "parameters": {"keyword_filter": "React", "sort_by": "recent"}, "confidence": 0.9, "reasoning": "search with sorting preference"}
+- "find 5 startup discussions from this week" → {"intent": "action", "function": "search_threads", "parameters": {"keyword_filter": "startup", "num_cards": 5, "hours_back": 168}, "confidence": 0.9, "reasoning": "specific search with constraints"}
 - "summarize this thread" (with pinned) → {"intent": "action", "function": "summarize_pinned_thread", "parameters": {}, "confidence": 0.9, "reasoning": "user wants summary of pinned thread"}
-- "summarize this thread" (no pinned) → {"intent": "action", "function": "get_thread_cards", "parameters": {"keyword_filter": "thread discussion"}, "confidence": 0.7, "reasoning": "no pinned thread, fallback to search"}
+- "summarize this thread" (no pinned) → {"intent": "action", "function": "search_threads", "parameters": {"keyword_filter": "thread discussion"}, "confidence": 0.7, "reasoning": "no pinned thread, fallback to search"}
 
 User message: "{message}"
 

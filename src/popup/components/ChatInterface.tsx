@@ -5,8 +5,8 @@ import { ConversationManager } from '../../utils/conversationUtils';
 import { webLLMClient } from '../../utils/webLLMClient';
 import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
-import { IntentDetector, FunctionCallingResult } from '../../utils/intentDetectorSingleStep';
-import { SearchService } from '../../utils/searchService';
+import { ToolOrchestrator } from '../../utils/tools';
+import { ThreadContextService } from '../../utils/ThreadContextService';
 import { logger } from '../../utils/logger';
 import { Modal } from './Modal';
 import { ActivityPage } from './ActivityPage';
@@ -15,36 +15,6 @@ import { ThreadCard } from './ThreadCard';
 import { MessageCircle, ExternalLink } from 'lucide-react';
 
 
-// API configuration for fetching thread cards
-const API_BASE_URL = 'https://techne-pipeline-func-prod.azurewebsites.net/api';
-
-const fetchThreadCards = async (numCards: number = 3): Promise<ThreadCardData[]> => {
-  try {
-    const response = await fetch(`${API_BASE_URL}/thread-cards`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        num_cards: numCards,
-        hours_back: 24,
-        sort_by: 'karma_density',
-        density_min_comment_constant: 100,
-        exclude_categories: ['General Discussion', 'Discussion']
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    logger.error('Error fetching thread cards:', error);
-    return [];
-  }
-};
 
 // Helper function to convert technical errors to user-friendly messages
 const getUserFriendlyErrorMessage = (error: string): string => {
@@ -56,31 +26,6 @@ const getUserFriendlyErrorMessage = (error: string): string => {
   return 'Something went wrong - please try again';
 };
 
-// Helper function to detect if user is requesting a pinned thread summary  
-const isPinnedThreadSummaryRequest = (functionResult: FunctionCallingResult): boolean => {
-  return functionResult.intent === 'action' && 
-         functionResult.functionCall?.name === 'summarize_pinned_thread';
-};
-
-// Helper function to generate pinned thread summary response - returns only the summary text
-const generatePinnedThreadSummary = (pinnedCard: ThreadCardData | null): string => {
-  if (!pinnedCard) {
-    return "I don't see a pinned thread to summarize. Please drag a thread from the sidebar to pin it first, then ask me to summarize it.";
-  }
-  
-  // Debug logging
-  logger.debug('Pinned card data:', pinnedCard);
-  logger.debug('Summary field:', pinnedCard.summary);
-  logger.debug('Summary exists?', !!pinnedCard.summary);
-  logger.debug('Summary length:', pinnedCard.summary?.length || 0);
-  
-  // Return just the summary text if available, otherwise a helpful message
-  if (pinnedCard.summary && pinnedCard.summary.trim() !== '') {
-    return pinnedCard.summary;
-  }
-  
-  return "I couldn't find a summary for this thread. The discussion might be too recent or the summary hasn't been generated yet. You can view the full discussion using the 'Join the thread' link in the pinned card above.";
-};
 
 interface ChatInterfaceProps {
   activeConversation: Conversation | null;
@@ -108,6 +53,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [contextThreads, setContextThreads] = useState<ThreadCardData[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [tempStatus, setTempStatus] = useState<string | null>(null);
+  const [toolOrchestrator] = useState(() => new ToolOrchestrator());
   const [pinnedCard, setPinnedCard] = useState<ThreadCardData | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -160,19 +106,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   // Load context threads on component mount
   useEffect(() => {
-    const loadContextThreads = async () => {
-      setThreadsLoading(true);
-      try {
-        const threads = await fetchThreadCards(3);
-        setContextThreads(threads);
-      } catch (error) {
-        logger.error('Error loading context threads:', error);
-      } finally {
-        setThreadsLoading(false);
-      }
-    };
-
-    loadContextThreads();
+    ThreadContextService.loadContextThreads(
+      3,
+      setThreadsLoading,
+      setContextThreads
+    );
   }, []);
 
   // Handle drag start from sidebar cards
@@ -240,68 +178,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
-  // Handle search request with streaming - reuse existing assistant message
-  const handleSearchRequest = async (searchQuery: string, assistantMessageId: string) => {
-    try {
-      logger.search('Starting handleSearchRequest for:', searchQuery);
-      
-      // Execute search with streaming
-      await SearchService.executeSearchStreaming(searchQuery, async (content) => {
-        try {
-          logger.debug('Received content update:', content.substring(0, 50) + '...');
-          
-          // Update streaming message state
-          setStreamingMessage(prev => prev ? {
-            ...prev,
-            content,
-            isStreaming: true
-          } : null);
-          
-          // Update database with current content (await the async operation)
-          await ConversationManager.updateMessage(
-            activeConversation!.id, 
-            assistantMessageId, 
-            content
-          );
-          
-          logger.database('Database updated with content');
-        } catch (error) {
-          logger.error('Error in search streaming callback:', error);
-        }
-      });
-      
-      logger.search('SearchService.executeSearchStreaming completed');
-      
-      // Finalize the streaming message
-      setStreamingMessage(prev => prev ? {
-        ...prev,
-        isStreaming: false
-      } : null);
-      
-      logger.debug('Getting updated conversation...');
-      
-      // Get updated conversation
-      const updatedConversation = await ConversationManager.getConversation(activeConversation!.id);
-      if (updatedConversation) {
-        onConversationUpdated(updatedConversation);
-        logger.debug('Conversation updated in UI');
-      }
-    } catch (error) {
-      logger.error('Search error:', error);
-      // Update the assistant message with error content
-      const errorContent = `I encountered an error while searching for "${searchQuery}": ${error instanceof Error ? error.message : 'Unknown error'}`;
-      await ConversationManager.updateMessage(
-        activeConversation!.id, 
-        assistantMessageId, 
-        errorContent
-      );
-      setError('Search failed. Please try again.');
-    } finally {
-      logger.debug('handleSearchRequest finally block');
-      setIsLoading(false);
-      setStreamingMessage(null);
-    }
-  };
 
 
   const handleSubmit = async () => {
@@ -369,74 +245,50 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       logger.model('Model loaded check:', isModelLoaded);
       
       if (isModelLoaded) {
-        logger.model('Model already loaded, checking for search intent...');
+        logger.model('Model already loaded, checking for tool execution...');
         try {
-          showTempStatus('💭 Understanding your request...', 800);
-          const functionResult = await IntentDetector.detectIntent(userMessage, undefined, pinnedCard);
-          logger.intent('Function call result:', functionResult);
-          
-          if (functionResult.intent === 'action' && functionResult.functionCall && functionResult.confidence > 0.5) {
-            const { name: functionName, parameters } = functionResult.functionCall;
-            
-            if (functionName === 'get_thread_cards') {
-              logger.search('Search function detected, executing search for:', parameters.keyword_filter);
-              // Show temporary status in bottom bar
-              showTempStatus(`🔍 Searching for "${parameters.keyword_filter}"...`, 1500);
-              
-              // Update both streaming message and database with search status
-              const searchStatusContent = `🔍 Searching for "${parameters.keyword_filter}"...`;
+          // Use ToolOrchestrator to handle message and potentially execute tools
+          const toolResult = await toolOrchestrator.handleMessage(userMessage, {
+            conversationId: workingConversation.id,
+            messageId: assistantMessage.id,
+            pinnedThread: pinnedCard,
+            onProgress: async (content) => {
+              // Update streaming message state
               setStreamingMessage(prev => prev ? {
                 ...prev,
-                content: searchStatusContent,
-                isStreaming: false
+                content,
+                isStreaming: true
               } : null);
-              
-              // Update the database message with search status
-              await ConversationManager.updateMessage(
-                workingConversation.id, 
-                assistantMessage.id, 
-                searchStatusContent
-              );
-              
-              await handleSearchRequest(parameters.keyword_filter, assistantMessage.id);
-              
-              // Get final updated conversation after search completes
-              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-              if (finalConversation) {
-                onConversationUpdated(finalConversation);
-              }
-              return;
-              
-            } else if (functionName === 'summarize_pinned_thread') {
-              logger.chat('Pinned thread summary function detected');
-              
-              const summaryResponse = generatePinnedThreadSummary(pinnedCard);
-              
-              // Update the assistant message with the summary
-              await ConversationManager.updateMessage(
-                workingConversation.id, 
-                assistantMessage.id, 
-                summaryResponse
-              );
-              
-              // Clear streaming state
-              setStreamingMessage(null);
-              
-              // Update conversation in UI
-              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-              if (finalConversation) {
-                onConversationUpdated(finalConversation);
-              }
-              return;
+            },
+            onStatusUpdate: showTempStatus
+          });
+          
+          if (toolResult.wasToolCalled) {
+            logger.debug('Tool was executed, finalizing...');
+            
+            // Finalize the streaming message
+            setStreamingMessage(prev => prev ? {
+              ...prev,
+              isStreaming: false
+            } : null);
+            
+            // Get final updated conversation after tool execution
+            const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+            if (finalConversation) {
+              onConversationUpdated(finalConversation);
             }
+            
+            // Clear streaming and exit early - tool handled the response
+            setStreamingMessage(null);
+            return;
           } else {
-            logger.chat('No action function detected or low confidence, continuing with chat. Confidence:', functionResult.confidence);
+            logger.chat('No tool executed, continuing with chat. Confidence:', toolResult.functionResult?.confidence);
           }
         } catch (error) {
-          logger.error('Intent detection failed:', error);
+          logger.error('Tool orchestration failed:', error);
         }
       } else {
-        logger.model('Model not loaded, will perform intent detection after loading');
+        logger.model('Model not loaded, will perform tool detection after loading');
       }
 
       // Only proceed with chat if we didn't intercept for search
@@ -465,67 +317,48 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           setIsModelLoading(false);
           setModelLoadingProgress(1);
           
-          // Perform intent detection after model loads
-          logger.model('Model loading complete, now checking for search intent...');
+          // Perform tool detection after model loads
+          logger.model('Model loading complete, now checking for tool execution...');
           try {
-            showTempStatus('💭 Understanding your request...', 800);
-            const functionResult = await IntentDetector.detectIntent(userMessage, undefined, pinnedCard);
-            logger.intent('Function call result:', functionResult);
+            // Use ToolOrchestrator to handle message and potentially execute tools
+            const toolResult = await toolOrchestrator.handleMessage(userMessage, {
+              conversationId: workingConversation.id,
+              messageId: assistantMessage.id,
+              pinnedThread: pinnedCard,
+              onProgress: async (content) => {
+                // Update streaming message state
+                setStreamingMessage(prev => prev ? {
+                  ...prev,
+                  content,
+                  isStreaming: true
+                } : null);
+              },
+              onStatusUpdate: showTempStatus
+            });
             
-            if (functionResult.intent === 'action' && functionResult.functionCall?.name === 'get_thread_cards' && functionResult.confidence > 0.5) {
-              logger.search('Search intent detected with high confidence, executing search for:', functionResult.functionCall?.parameters.keyword_filter);
-              // Show temporary status in bottom bar
-              showTempStatus(`🔍 Searching for "${functionResult.functionCall?.parameters.keyword_filter}"...`, 1500);
+            if (toolResult.wasToolCalled) {
+              logger.debug('Tool was executed after model load, aborting chat...');
               
-              // Update both streaming message and database with search status
-              const searchStatusContent = `🔍 Searching for "${functionResult.functionCall?.parameters.keyword_filter}"...`;
+              // Finalize the streaming message
               setStreamingMessage(prev => prev ? {
                 ...prev,
-                content: searchStatusContent,
                 isStreaming: false
               } : null);
               
-              // Update the database message with search status
-              await ConversationManager.updateMessage(
-                workingConversation.id, 
-                assistantMessage.id, 
-                searchStatusContent
-              );
-              
-              await handleSearchRequest(functionResult.functionCall?.parameters.keyword_filter, assistantMessage.id);
-              
-              // Get final updated conversation after search completes
+              // Get final updated conversation after tool execution
               const finalConversation = await ConversationManager.getConversation(workingConversation.id);
               if (finalConversation) {
                 onConversationUpdated(finalConversation);
               }
-              return false; // Abort chat
-            } else if (functionResult.intent === 'action' && functionResult.functionCall?.name === 'summarize_pinned_thread' && functionResult.confidence > 0.5) {
-              logger.chat('Pinned thread summary function detected');
               
-              const summaryResponse = generatePinnedThreadSummary(pinnedCard);
-              
-              // Update the assistant message with the summary
-              await ConversationManager.updateMessage(
-                workingConversation.id, 
-                assistantMessage.id, 
-                summaryResponse
-              );
-              
-              // Clear streaming state
+              // Clear streaming and abort chat
               setStreamingMessage(null);
-              
-              // Update conversation in UI
-              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-              if (finalConversation) {
-                onConversationUpdated(finalConversation);
-              }
               return false; // Abort chat
             } else {
-              logger.chat('No action function detected or low confidence, continuing with chat. Confidence:', functionResult.confidence);
+              logger.chat('No tool executed after model load, continuing with chat. Confidence:', toolResult.functionResult?.confidence);
             }
           } catch (error) {
-            logger.error('Intent detection failed:', error);
+            logger.error('Tool orchestration after model load failed:', error);
           }
           
           return true; // Continue with chat
