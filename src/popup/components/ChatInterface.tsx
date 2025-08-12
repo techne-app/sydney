@@ -5,7 +5,7 @@ import { ConversationManager } from '../../utils/conversationUtils';
 import { webLLMClient } from '../../utils/webLLMClient';
 import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
-import { IntentDetector, FunctionCallingResult } from '../../utils/intentDetector';
+import { IntentDetector, FunctionCallingResult } from '../../utils/intentDetectorSingleStep';
 import { SearchService } from '../../utils/searchService';
 import { logger } from '../../utils/logger';
 import { Modal } from './Modal';

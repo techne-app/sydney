@@ -6,7 +6,7 @@ jest.mock('@mlc-ai/web-llm', () => ({
   prebuiltAppConfig: {}
 }));
 
-import { IntentDetector, FunctionCallingResult } from './intentDetector';
+import { IntentDetector, FunctionCallingResult } from './intentDetectorSingleStep';
 import { webLLMClient } from './webLLMClient';
 import { configStore } from './configStore';
 import { ThreadCardData } from '../types/chat';
