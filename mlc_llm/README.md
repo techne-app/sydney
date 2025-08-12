@@ -148,33 +148,45 @@ The system supports three core functions for handling user requests:
 #### Single-Step Results  
 | Model | Intent Accuracy | Function Accuracy | Overall Accuracy | Avg Time |
 |-------|-----------------|-------------------|------------------|----------|
-| Llama-3.2-3B-Instruct | 85.4% | 80.9% | 80.9% | 1.046s |
-| gemma-2-2b-it | 79.7% | 77.1% | 77.1% | 1.622s |
-| Phi-3.5-mini-instruct | 75.5% | 71.2% | 71.2% | 3.324s |
+| Llama-3.2-3B-Instruct | 84.1% | 80.3% | 80.3% | 1.053s |
+| gemma-2-2b-it | 75.2% | 73.9% | 73.9% | 1.651s |
+| Phi-3.5-mini-instruct | 67.5% | 63.1% | 63.1% | 3.321s |
+
+> **Single-Step Accuracy Measurement**: Even though single-step uses one LLM call, we measure Intent and Function accuracy separately by analyzing the unified JSON response:
+> - **Intent Accuracy**: Percentage where `"intent"` field matches expected (action vs chat)
+> - **Function Accuracy**: Percentage where `"function"` field matches expected (for action cases only)  
+> - **Overall Accuracy**: Percentage where both intent AND function are correct (holistic evaluation)
+> This allows direct comparison with two-step results while maintaining the single-inference advantage.
 
 #### Two-Step Results  
-| Model | Step1 Accuracy | Step2 Accuracy | Overall Accuracy | Total Time |
+| Model | Step1 Accuracy | Step2 Accuracy | Overall Accuracy | Avg Time |
 |-------|----------------|----------------|------------------|------------|
 | Phi-3.5-mini-instruct | 80.9% | 87.0% | 77.1% | 4.923s |
 | gemma-2-2b-it | 79.5% | 70.4% | 73.7% | 2.926s |
 | Llama-3.2-3B-Instruct | 72.4% | 75.7% | 71.2% | 1.987s |
 
+> **Two-Step Accuracy Measurement**: Sequential evaluation with conditional execution and specialized denominators:
+> - **Step1 Accuracy**: Percentage where intent classification (action vs chat) is correct across all 157 test cases
+> - **Step2 Accuracy**: Percentage where function selection is correct, calculated only among cases that reached Step 2 (where Step 1 predicted "action") 
+> - **Overall Accuracy**: Percentage where the entire flow succeeds - Step 1 must be correct AND (Step 2 must be correct if executed OR Step 1 correctly identified "chat")
+> This provides granular debugging capabilities and measures each specialized step independently on its applicable subset.
+
 #### Architecture Performance Comparison
 
 **Single-Step vs Two-Step Accuracy Differences**:
-- **Llama-3.2-3B-Instruct**: Single-step 80.9% vs Two-step 71.2% = **+9.7% advantage for single-step**
-- **gemma-2-2b-it**: Single-step 77.1% vs Two-step 73.7% = **+3.4% advantage for single-step**  
-- **Phi-3.5-mini-instruct**: Single-step 71.2% vs Two-step 77.1% = **-5.9% advantage for two-step**
+- **Llama-3.2-3B-Instruct**: Single-step 80.3% vs Two-step 71.2% = **+9.1% advantage for single-step**
+- **gemma-2-2b-it**: Single-step 73.9% vs Two-step 73.7% = **+0.2% advantage for single-step**  
+- **Phi-3.5-mini-instruct**: Single-step 63.1% vs Two-step 77.1% = **-14.0% advantage for two-step**
 
 **Speed Comparison**:
-- **Llama-3.2-3B-Instruct**: 1.046s vs 1.987s = **1.9x faster single-step**
-- **gemma-2-2b-it**: 1.622s vs 2.926s = **1.8x faster single-step**
-- **Phi-3.5-mini-instruct**: 3.324s vs 4.923s = **1.5x faster single-step**
+- **Llama-3.2-3B-Instruct**: 1.053s vs 1.987s = **1.9x faster single-step**
+- **gemma-2-2b-it**: 1.651s vs 2.926s = **1.8x faster single-step**
+- **Phi-3.5-mini-instruct**: 3.321s vs 4.923s = **1.5x faster single-step**
 
 #### Key Findings
 
 **Best Overall Performance**: 
-- **Single-Step**: Llama-3.2-3B-Instruct (80.9% accuracy, 1.046s)
+- **Single-Step**: Llama-3.2-3B-Instruct (80.3% accuracy, 1.053s)
 - **Two-Step**: Phi-3.5-mini-instruct (77.1% accuracy, 4.923s)
 
 **Architecture Trade-offs**:
@@ -183,18 +195,18 @@ The system supports three core functions for handling user requests:
 - **Speed**: 1.5x-1.9x faster across all models
 - **Simplicity**: One LLM call, easier to debug
 - **Resource Efficiency**: Lower memory usage, fewer model loads
-- **Better for 2/3 models**: Llama-3.2-3B and gemma-2-2b perform better
+- **Excellent for Llama-3.2-3B**: 9.1% accuracy advantage, fastest inference
 
 **Two-Step Advantages**:
 - **Granular Debugging**: Separate measurement of intent vs function calling
-- **Specialized Optimization**: Each step independently optimizable
+- **Specialized Optimization**: Each step independently optimizable  
 - **MCP-Ready**: Natural fit for tool calling patterns
-- **Better for Phi-3.5**: Only model that benefits from two-step approach
+- **Much better for Phi-3.5**: 14.0% accuracy advantage - model benefits significantly from task separation
 
 **Model-Specific Insights**:
-- **Llama-3.2-3B-Instruct**: Excels at unified reasoning (single-step), struggles with sequential tasks
-- **Phi-3.5-mini-instruct**: Benefits from task separation, excellent at function selection (87.0% Step 2)
-- **gemma-2-2b-it**: Consistent across both approaches, slight preference for single-step
+- **Llama-3.2-3B-Instruct**: Dominates single-step with unified reasoning, struggles with sequential two-step tasks
+- **Phi-3.5-mini-instruct**: Strongly prefers task separation - excellent at Step 2 function selection (87.0%) but struggles with complex single-step prompts
+- **gemma-2-2b-it**: Architecture-agnostic - performs essentially identically in both approaches (0.2% difference)
 
 ## Test Dataset Structure
 
@@ -284,9 +296,7 @@ uv run python mlc_llm/eval_single_step.py --model "Phi-3.5-mini-instruct-q4f16_1
 ## Future Enhancements
 
 ### Planned Improvements
-- **Multi-step intent detection** for complex queries
+- **More simple actions and evaluations** using user feedback
+- **Multi-step intent detection and reasoning** for complex queries
 - **Contextual awareness** using conversation history
-
-### MCP Integration Readiness
-- **Multi-step reasoning** capabilities for complex queries
-- **Function calling patterns** prepared for MCP server integration
+- **Evaluate function calling models** for finding higher accuracies
