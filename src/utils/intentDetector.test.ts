@@ -25,7 +25,7 @@ describe('IntentDetector', () => {
     });
   });
 
-  describe('detectIntent - Two-Step Approach', () => {
+  describe('detectIntent - Single-Step Approach', () => {
     test('correctly handles chat intent (single step)', async () => {
       const intentResponse = '{"intent": "chat", "confidence": 0.9, "reasoning": "Social greeting"}';
       
@@ -47,16 +47,11 @@ describe('IntentDetector', () => {
       });
     });
 
-    test('correctly handles action intent with search function (two steps)', async () => {
-      const intentResponse = '{"intent": "action", "confidence": 0.9, "reasoning": "Search request"}';
-      const actionResponse = '{"function": "get_thread_cards", "confidence": 0.8, "reasoning": "Search for discussions", "parameters": {"keyword_filter": "AI"}}';
+    test('correctly handles action intent with search function (single step)', async () => {
+      const singleStepResponse = '{"intent": "action", "function": "get_thread_cards", "confidence": 0.8, "reasoning": "Search for discussions", "parameters": {"keyword_filter": "AI"}}';
       
-      let callCount = 0;
       mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
-        setTimeout(() => {
-          callCount++;
-          onFinish?.(callCount === 1 ? intentResponse : actionResponse);
-        }, 0);
+        setTimeout(() => onFinish?.(singleStepResponse), 0);
         return Promise.resolve();
       });
 
@@ -68,8 +63,8 @@ describe('IntentDetector', () => {
           name: 'get_thread_cards',
           parameters: { keyword_filter: 'AI' }
         },
-        confidence: 0.8, // Minimum of both steps
-        reasoning: 'Intent: Search request; Function: Search for discussions'
+        confidence: 0.8,
+        reasoning: 'Search for discussions'
       });
     });
 
@@ -88,15 +83,10 @@ describe('IntentDetector', () => {
         updated_at: '2023-01-01T00:00:00Z'
       };
 
-      const intentResponse = '{"intent": "action", "confidence": 0.95, "reasoning": "Summarize pinned thread"}';
-      const actionResponse = '{"function": "summarize_pinned_thread", "confidence": 0.9, "reasoning": "Process pinned thread", "parameters": {"format": "paragraph"}}';
+      const singleStepResponse = '{"intent": "action", "function": "summarize_pinned_thread", "confidence": 0.9, "reasoning": "Process pinned thread", "parameters": {"format": "paragraph"}}';
       
-      let callCount = 0;
       mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
-        setTimeout(() => {
-          callCount++;
-          onFinish?.(callCount === 1 ? intentResponse : actionResponse);
-        }, 0);
+        setTimeout(() => onFinish?.(singleStepResponse), 0);
         return Promise.resolve();
       });
 
@@ -109,30 +99,25 @@ describe('IntentDetector', () => {
           parameters: { format: 'paragraph' }
         },
         confidence: 0.9,
-        reasoning: 'Intent: Summarize pinned thread; Function: Process pinned thread'
+        reasoning: 'Process pinned thread'
       });
     });
 
-    test('calls webLLMClient with correct parameters for both steps', async () => {
-      const intentResponse = '{"intent": "action", "confidence": 0.9}';
-      const actionResponse = '{"function": "get_thread_cards", "confidence": 0.8}';
+    test('calls webLLMClient with correct parameters for single step', async () => {
+      const singleStepResponse = '{"intent": "action", "function": "get_thread_cards", "confidence": 0.8}';
       
-      let callCount = 0;
       mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
-        setTimeout(() => {
-          callCount++;
-          onFinish?.(callCount === 1 ? intentResponse : actionResponse);
-        }, 0);
+        setTimeout(() => onFinish?.(singleStepResponse), 0);
         return Promise.resolve();
       });
 
       await IntentDetector.detectIntent('test message');
 
-      // Should be called twice - once for intent, once for action
-      expect(mockWebLLMClient.chat).toHaveBeenCalledTimes(2);
+      // Should be called once for single-step approach
+      expect(mockWebLLMClient.chat).toHaveBeenCalledTimes(1);
       
-      // Check first call (intent detection)
-      expect(mockWebLLMClient.chat).toHaveBeenNthCalledWith(1, {
+      // Check the call parameters
+      expect(mockWebLLMClient.chat).toHaveBeenCalledWith({
         messages: [
           {
             role: 'user',
@@ -143,7 +128,7 @@ describe('IntentDetector', () => {
           model: 'test-model',
           temperature: 0.1,
           topP: 0.9,
-          maxTokens: 200,
+          maxTokens: 300, // Single-step uses 300 tokens
           stream: true
         },
         onUpdate: expect.any(Function),
@@ -152,7 +137,7 @@ describe('IntentDetector', () => {
       });
     });
 
-    test('handles step 1 parsing errors gracefully', async () => {
+    test('handles parsing errors gracefully', async () => {
       const invalidResponse = 'invalid json response';
       
       mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
@@ -169,35 +154,10 @@ describe('IntentDetector', () => {
           parameters: { response_type: 'explanation' }
         },
         confidence: 0.0,
-        reasoning: 'Failed to parse LLM response'
+        reasoning: 'Failed to parse LLM response, defaulting to chat'
       });
     });
 
-    test('handles step 2 parsing errors gracefully', async () => {
-      const intentResponse = '{"intent": "action", "confidence": 0.9}';
-      const invalidActionResponse = 'invalid json response';
-      
-      let callCount = 0;
-      mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
-        setTimeout(() => {
-          callCount++;
-          onFinish?.(callCount === 1 ? intentResponse : invalidActionResponse);
-        }, 0);
-        return Promise.resolve();
-      });
-
-      const result = await IntentDetector.detectIntent('test message');
-
-      expect(result).toEqual({
-        intent: 'action',
-        functionCall: {
-          name: 'get_thread_cards',
-          parameters: { keyword_filter: 'general discussion' }
-        },
-        confidence: 0.0, // Fallback confidence from step 2 error
-        reasoning: 'Intent: action; Function: Failed to parse LLM response, fallback to search'
-      });
-    });
 
     test('calls callbacks for model loading progress', async () => {
       const intentResponse = '{"intent": "chat", "confidence": 0.9}';
