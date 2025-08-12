@@ -197,7 +197,28 @@ class SingleStepEvaluator:
         
         return parsed
     
-    def evaluate_single_case(self, test_case: TestCase, temperature: float = 0.1) -> Optional[SingleStepResult]:
+    def _create_failed_result(self, test_case: TestCase, function_expected: str, error_reason: str, inference_time: float, raw_response: str) -> SingleStepResult:
+        """Create a failed SingleStepResult for parsing/response failures"""
+        return SingleStepResult(
+            question=test_case.question,
+            intent_expected=test_case.intent_expected,
+            function_expected=function_expected,
+            category=test_case.category,
+            difficulty=test_case.difficulty,
+            notes=test_case.notes,
+            model_name=self.model_name,
+            intent_predicted="chat",  # Default fallback
+            function_predicted=None,
+            confidence=0.0,  # No confidence in failed result
+            reasoning=f"FAILED: {error_reason}",
+            inference_time=inference_time,
+            raw_response=raw_response,
+            intent_correct=False,  # Failed result is always incorrect
+            function_correct=False,
+            overall_correct=False
+        )
+    
+    def evaluate_single_case(self, test_case: TestCase, temperature: float = 0.1) -> SingleStepResult:
         """Evaluate a single test case using single-step approach"""
         function_expected = self._determine_expected_function(test_case)
         
@@ -206,12 +227,13 @@ class SingleStepEvaluator:
         response = self.model_wrapper.call_model(prompt, temperature, max_tokens=300)
         inference_time = getattr(self.model_wrapper, 'last_inference_time', 0.0)
         
+        # Handle failures - create failed result instead of returning None
         if not response:
-            return None
+            return self._create_failed_result(test_case, function_expected, "No model response", inference_time, "")
         
         parsed = self._parse_single_step_response(response)
         if "error" in parsed:
-            return None
+            return self._create_failed_result(test_case, function_expected, parsed.get("error", "Parse error"), inference_time, response)
         
         # Extract predictions
         intent_predicted = parsed.get('intent', 'chat')
@@ -280,38 +302,37 @@ class SingleStepEvaluator:
             individual_results = []
             for iteration in range(iterations):
                 result = self.evaluate_single_case(test_case, temperature)
-                if result:
-                    individual_results.append(result)
+                individual_results.append(result)  # Always append - failures are now valid results
                 
                 if verbose and iteration == 0:  # Show first result for debugging
-                    if result:
-                        print(f"   Predicted: {result.intent_predicted}, Function: {result.function_predicted}")
-                        print(f"   Correct: Intent={result.intent_correct}, Function={result.function_correct}, Overall={result.overall_correct}")
+                    print(f"   Predicted: {result.intent_predicted}, Function: {result.function_predicted}")
+                    print(f"   Correct: Intent={result.intent_correct}, Function={result.function_correct}, Overall={result.overall_correct}")
+                    if not result.overall_correct and "FAILED:" in result.reasoning:
+                        print(f"   Error: {result.reasoning}")
             
-            if individual_results:
-                # Calculate aggregated metrics
-                intent_correct_count = sum(1 for r in individual_results if r.intent_correct)
-                function_correct_count = sum(1 for r in individual_results if r.function_correct)
-                overall_correct_count = sum(1 for r in individual_results if r.overall_correct)
-                
-                aggregated_result = SingleStepAggregatedResult(
-                    question=test_case.question,
-                    intent_expected=test_case.intent_expected,
-                    function_expected=self._determine_expected_function(test_case),
-                    category=test_case.category,
-                    difficulty=test_case.difficulty,
-                    notes=test_case.notes,
-                    model_name=self.model_name,
-                    iterations=len(individual_results),
-                    intent_accuracy=intent_correct_count / len(individual_results),
-                    function_accuracy=function_correct_count / len(individual_results),
-                    overall_accuracy=overall_correct_count / len(individual_results),
-                    mean_confidence=statistics.mean([r.confidence for r in individual_results]),
-                    mean_inference_time=statistics.mean([r.inference_time for r in individual_results]),
-                    individual_results=individual_results
-                )
-                
-                aggregated_results.append(aggregated_result)
+            # Calculate aggregated metrics (always process - we always have results now)
+            intent_correct_count = sum(1 for r in individual_results if r.intent_correct)
+            function_correct_count = sum(1 for r in individual_results if r.function_correct)
+            overall_correct_count = sum(1 for r in individual_results if r.overall_correct)
+            
+            aggregated_result = SingleStepAggregatedResult(
+                question=test_case.question,
+                intent_expected=test_case.intent_expected,
+                function_expected=self._determine_expected_function(test_case),
+                category=test_case.category,
+                difficulty=test_case.difficulty,
+                notes=test_case.notes,
+                model_name=self.model_name,
+                iterations=iterations,  # Use requested iterations, not len(individual_results)
+                intent_accuracy=intent_correct_count / iterations,  # Divide by total iterations, not just successful ones
+                function_accuracy=function_correct_count / iterations,
+                overall_accuracy=overall_correct_count / iterations,  # Consistent with above
+                mean_confidence=statistics.mean([r.confidence for r in individual_results]),
+                mean_inference_time=statistics.mean([r.inference_time for r in individual_results]),
+                individual_results=individual_results
+            )
+            
+            aggregated_results.append(aggregated_result)
         
         self.total_eval_time = time.time() - start_time
         return aggregated_results
