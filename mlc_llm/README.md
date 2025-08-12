@@ -118,7 +118,7 @@ The two-step approach uses specialized prompts: the first determines intent (cha
 
 The system supports three core functions for handling user requests:
 
-### `get_thread_cards`
+### `search_threads`
 **Purpose**: Find, show, retrieve, discover HN content/discussions using real backend API
 
 **Parameters**:
@@ -223,7 +223,7 @@ Uses **BFCL (Berkeley Function Calling Leaderboard) format** with 157 test cases
   "id": "action_001",
   "question": "find discussions about AI", 
   "intent_expected": "action",
-  "expected_function_call": "get_thread_cards(keyword_filter='AI')"
+  "expected_function_call": "search_threads(keyword_filter='AI')"
 }
 ```
 
