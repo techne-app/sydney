@@ -1,526 +1,277 @@
 # Intent Detection Model Evaluation
 
-This directory contains tools for evaluating and testing intent detection models used in the Techne browser extension.
+This directory contains tools for evaluating and testing intent detection using models that run on edge devices (e.g. in a browser extension called Techne Navigator).
+
+The core idea here is that we want to use SLMs for determining the user intent and then call the appropriate MCP server. To be sure, the model can do a small task but fundamentally, it needs to be very good at calling for help. 
+
+## Table of Contents
+
+- [Overview](#overview)
+  - [Task 1: Intent Classification](#task-1-intent-classification)
+  - [Task 2: Function Calling (Action Cases Only)](#task-2-function-calling-action-cases-only)
+- [Single-Step Approach](#single-step-approach)
+  - [Mechanism](#mechanism)
+  - [Evaluation Methodology](#evaluation-methodology)
+  - [Advantages](#advantages)
+  - [Trade-offs](#trade-offs)
+- [Two-Step Approach](#two-step-approach)
+  - [Mechanism](#mechanism-1)
+  - [Evaluation Methodology](#evaluation-methodology-1)
+  - [Advantages](#advantages-1)
+  - [Trade-offs](#trade-offs-1)
+- [Function Reference](#function-reference)
+- [Model Evaluation Results](#model-evaluation-results)
+- [Test Dataset Structure](#test-dataset-structure)
+- [How to run evaluations](#how-to-run-evaluations)
+  - [Setup Environment](#setup-environment)
+  - [Download Models](#download-models)
+  - [Run Evaluations](#run-evaluations)
+  - [Extending Evaluations](#extending-evaluations)
+- [Future Enhancements](#future-enhancements)
+  - [Planned Improvements](#planned-improvements)
+  - [MCP Integration Readiness](#mcp-integration-readiness)
 
 ## Overview
 
-The intent detection system uses a **two-step classification approach** to route user requests in the chat interface:
+The intent detection system uses Small Language Models (SLMs) to route user requests in the chat interface. Following the principle that models should excel at "calling for help" rather than doing everything themselves, the system focuses on accurately determining user intent and selecting the appropriate MCP server or function to handle the actual task.
 
-### Step 1: Intent Classification
+The system needs to perform two distinct tasks:
+
+### Task 1: Intent Classification
 Determines whether user messages are asking for **CONVERSATIONAL** responses or want the system to **TAKE ACTION**.
 
 - **chat**: User wants conversation, explanations, opinions, advice, or general discussion
-- **action**: User wants the system to perform an action - search, find, retrieve, create, analyze, etc.
+- **action**: User wants the system to perform an action - search, find, retrieve, create, analyze, download, upload, etc.
 
-### Step 2: Function Calling (Action Cases Only)
-For messages classified as "action", determines which specific function to call and extracts parameters:
+### Task 2: Function Calling (Action Cases Only)
+For messages classified as "action", determines which specific function or MCP server to call and extracts the necessary parameters. This embodies the "calling for help" principle - the SLM doesn't perform the actual task but correctly identifies what help is needed and how to request it. See [Function Reference](#function-reference) for detailed specifications.
 
-- **get_thread_cards**: Find, show, retrieve, discover HN content/discussions using real backend API
-- **summarize_pinned_thread**: Generate summaries of pinned discussion threads
-- **no_action**: Fallback for conversational responses
+## Single-Step Approach
 
-### Two-Step Evaluation Methodology
-The evaluation system separately measures performance at each step:
+The single-step approach combines both intent classification and function calling into a single LLM inference call using a unified prompt.
 
+### Mechanism
+- **Unified Processing**: One SLM call processes the user message and returns both intent classification and function selection with parameters
+- **Structured Output**: The model returns JSON with intent, function name, parameters, confidence, and reasoning in one response
+- **Context Awareness**: Single prompt includes all necessary context for both intent detection and function calling
+- **Efficient Routing**: The model focuses on accurately identifying which tool or MCP server can best handle the user's request
+
+### Evaluation Methodology
+- **Combined Accuracy**: Test cases are evaluated holistically - both intent and function must be correct to pass
+- **Single Inference**: Each test case requires only one model call
+- **Prompt**: Uses `src/prompts/singleStep.ts` for unified intent+function detection
+
+### Advantages
+- **Faster Inference**: Only one LLM call required instead of two sequential calls
+- **Lower Latency**: Reduced total processing time, especially important for edge devices
+- **Simpler Architecture**: Single prompt system is easier to maintain and debug
+- **Better Context Preservation**: No information loss between separate inference steps
+
+### Trade-offs
+- **Complex Prompts**: Single prompt must handle both classification and function calling logic
+- **Token Usage**: May require more tokens per inference to handle complex combined logic
+- **Less Granular Debugging**: Harder to isolate whether failures occur in intent detection vs function calling
+
+### Prompt
+**Single-step prompt**: [src/prompts/singleStep.ts](../src/prompts/singleStep.ts)
+
+This prompt combines intent classification and function calling logic into a unified system that handles both tasks in a single SLM inference call. The prompt is designed to make the model excel at "calling for help" by accurately identifying which tool or MCP server is needed.
+
+## Two-Step Approach
+
+The two-step approach separates intent classification and function calling into sequential LLM inference calls with specialized prompts for each task.
+
+### Mechanism
+- **Sequential Processing**: First SLM call determines intent (chat vs action), then second call handles function selection and parameter extraction
+- **Specialized Prompts**: Each step uses focused prompts optimized for specific tasks (classification vs function calling)
+- **Conditional Flow**: Function calling only occurs if intent is classified as "action"
+- **Staged Routing**: Two-stage process for identifying the appropriate tool or MCP server to handle the user's request
+
+### Evaluation Methodology
+- **Granular Accuracy**: Test cases are evaluated at each step independently, providing detailed performance insights
 - **Step 1 Accuracy**: Percentage of test cases where intent classification (chat vs action) is correct
 - **Step 2 Accuracy**: Percentage of action cases where function calling and parameter extraction is correct  
 - **Overall Accuracy**: Combined accuracy across both steps - a test case must pass both steps to be considered correct
+- **Prompts**: Uses `src/prompts/intentOnly.ts` and `src/prompts/actionOnly.ts`
 
-This approach provides granular insights into model performance and identifies whether failures occur during intent detection or function calling. It's **extensible and MCP-ready** - new functions can be added without retraining Step 1, and the architecture naturally maps to tool calling patterns for MCP server integration.
+### Advantages
+- **Granular Debugging**: Easy to identify whether failures occur in intent detection vs function calling
+- **Specialized Optimization**: Each prompt can be independently optimized for its specific task
+- **Modular Architecture**: New functions can be added without modifying intent classification logic
+- **Clear Separation**: Distinct evaluation phases provide detailed performance analytics
+- **MCP-Ready**: Architecture naturally maps to tool calling patterns for MCP server integration
 
-## Scripts
+### Trade-offs
+- **Higher Latency**: Two sequential LLM calls increase total processing time
+- **Context Loss**: Information may be lost between separate inference steps
+- **Complex Orchestration**: Requires coordination between multiple LLM calls
+- **Resource Usage**: More compute resources needed for sequential processing
 
-### `model_wrapper.py`
-Core model inference wrapper with built-in smoke testing functionality for quick validation before full evaluation.
+### Prompts
+**Step 1 - Intent classification**: [src/prompts/intentOnly.ts](../src/prompts/intentOnly.ts)
 
-```bash
-# Run default smoke test (4 basic queries)
-python mlc_llm/model_wrapper.py
+**Step 2 - Function calling**: [src/prompts/actionOnly.ts](../src/prompts/actionOnly.ts)
 
-# Test specific model
-python mlc_llm/model_wrapper.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
+The two-step approach uses specialized prompts: the first determines intent (chat vs action), and if action is detected, the second prompt handles function selection and parameter extraction. Both prompts are optimized to help the SLM excel at "calling for help" by making precise routing decisions.
 
-# Test a single query
-python mlc_llm/model_wrapper.py --query "find AI discussions"
+## Function Reference
 
-# Adjust temperature
-python mlc_llm/model_wrapper.py --temp 0.3 --query "search for startups"
+The system supports three core functions for handling user requests:
 
-# Quiet mode (less verbose output)
-python mlc_llm/model_wrapper.py --quiet
-```
+### `get_thread_cards`
+**Purpose**: Find, show, retrieve, discover HN content/discussions using real backend API
 
-The smoke test validates basic model functionality by testing 4 representative queries (2 action, 2 chat) and verifies that the model loads correctly, produces valid JSON responses, and achieves reasonable accuracy on simple cases. It's designed as a quick sanity check before running full evaluations.
+**Parameters**:
+- `keyword_filter` (required): Text to filter discussions  
+- `hours_back`: Hours to look back (default: 168)
+- `sort_by`: Sort method - "karma_density", "recent", "comment_count"
+- `num_cards`: Number of cards to return
+- `density_min_comment_constant`: Quality threshold
 
-### `eval_two_step.py`
-Two-step evaluation framework that separately evaluates intent classification (Step 1) and function calling (Step 2).
+### `summarize_pinned_thread`  
+**Purpose**: Generate summaries of pinned discussion threads
 
-```bash
-# Full evaluation with default settings (5 iterations)
-uv run python mlc_llm/eval_two_step.py
+**Parameters**:
+- `format`: Summary format - "bullet_points", "paragraph", "timeline"
+- `max_length`: Maximum summary length (default: 500)
 
-# Extended evaluation (10 iterations for more stable results)
-uv run python mlc_llm/eval_two_step.py --iterations 10
+### `no_action`
+**Purpose**: Fallback for conversational responses
 
-# Quiet mode (less verbose output)
-uv run python mlc_llm/eval_two_step.py --iterations 10 --quiet
-
-# Test specific models
-uv run python mlc_llm/eval_two_step.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
-```
-
-### `eval_single_step.py`
-Single-step evaluation framework that combines intent classification and function calling into one LLM call.
-
-```bash
-# Full evaluation with default settings (10 iterations)
-uv run python mlc_llm/eval_single_step.py
-
-# Extended evaluation with quiet mode
-uv run python mlc_llm/eval_single_step.py --iterations 10 --quiet
-
-# Test specific dataset categories
-uv run python mlc_llm/eval_single_step.py --dataset pinned_thread_summary
-
-# Export results to custom file
-uv run python mlc_llm/eval_single_step.py --export-results custom_results.json
-```
+**Parameters**:
+- `response_type`: Type of response - "greeting", "opinion", "explanation", "social"
 
 ## Model Evaluation Results
 
-### 🏆 Single-Step vs Two-Step Comparison (158 Test Cases, 10 Iterations)
+### Single-Step vs Two-Step Comparison (144/158 Test Cases, 10 Iterations)
 
-After comprehensive evaluation, the **single-step approach proves superior** across most metrics:
+> **Note**: Single-step evaluation uses 144 test cases, two-step uses 158 test cases (slightly different dataset versions), but both use 10 iterations for statistical reliability.
 
-#### Single-Step Results (Recommended Approach)
-| Model | Overall Accuracy | Avg Time | Status |
-|-------|------------------|----------|---------|
-| **Llama-3.2-3B-Instruct** | **81.1%** | 0.829s | ✅ **EXCELLENT** |
-| **gemma-2-2b-it** | **76.7%** | 1.695s | ⚠️ **ACCEPTABLE** |
-| **Phi-3.5-mini-instruct** | 72.3% | 2.953s | ❌ **POOR** |
+#### Single-Step Results
+| Model | Overall Accuracy | Avg Time |
+|-------|------------------|----------|
+| Llama-3.2-3B-Instruct | 81.1% | 0.829s |
+| gemma-2-2b-it | 76.7% | 1.695s |
+| Phi-3.5-mini-instruct | 72.3% | 2.953s |
 
-#### Two-Step Results (Previous Approach)  
-| Model | Overall Accuracy | Total Time | Status |
-|-------|------------------|------------|---------|
-| **Phi-3.5-mini-instruct** | **77.3%** | ~4.89s | ⚠️ **ACCEPTABLE** |
-| **gemma-2-2b-it** | 73.4% | ~2.84s | ❌ **POOR** |
-| **Llama-3.2-3B-Instruct** | 70.8% | ~2.47s | ❌ **POOR** |
+#### Two-Step Results  
+| Model | Overall Accuracy | Total Time |
+|-------|------------------|------------|
+| Phi-3.5-mini-instruct | 77.3% | 4.890s |
+| gemma-2-2b-it | 73.4% | 2.841s |
+| Llama-3.2-3B-Instruct | 70.8% | 2.467s |
 
-#### 🎯 Key Performance Differences
+#### Performance Differences
 
-**🚀 Llama-3.2-3B-Instruct: MASSIVE IMPROVEMENT**
-- **Single-step**: 81.1% vs **Two-step**: 70.8% = **+10.3% accuracy gain**
-- **Speed**: 0.829s vs ~2.47s = **3.0x faster**
-- **Status**: Upgraded from ❌ POOR → ✅ EXCELLENT
-- **New champion**: Best overall performer
+**Llama-3.2-3B-Instruct**:
+- Single-step: 81.1% vs Two-step: 70.8% = +10.3% accuracy gain
+- Speed: 0.829s vs 2.467s = 3.0x faster
 
-**📈 gemma-2-2b-it: SOLID GAINS**
-- **Single-step**: 76.7% vs **Two-step**: 73.4% = **+3.3% accuracy gain**  
-- **Speed**: 1.695s vs ~2.84s = **1.7x faster**
-- **Status**: Improved within ⚠️ ACCEPTABLE tier
+**gemma-2-2b-it**:
+- Single-step: 76.7% vs Two-step: 73.4% = +3.3% accuracy gain  
+- Speed: 1.695s vs 2.841s = 1.7x faster
 
-**📉 Phi-3.5-mini-instruct: REGRESSION**
-- **Single-step**: 72.3% vs **Two-step**: 77.3% = **-5.0% accuracy loss**
-- **Speed**: 2.953s vs ~4.89s = **1.7x faster but still slowest**
-- **Status**: Downgraded from ⚠️ ACCEPTABLE → ❌ POOR
+**Phi-3.5-mini-instruct**:
+- Single-step: 72.3% vs Two-step: 77.3% = -5.0% accuracy loss
+- Speed: 2.953s vs 4.890s = 1.7x faster
 
-#### 🏆 Overall Comparison Summary
-- **Average accuracy**: Single-step 76.7% vs Two-step 73.8% = **+2.9% better**
-- **Speed improvement**: 2x-3x faster inference across all models
-- **Architecture simplicity**: One prompt vs two sequential LLM calls
-- **Resource efficiency**: Lower memory usage, fewer model loads
+#### Overall Summary
+- Average accuracy: Single-step 76.7% vs Two-step 73.8% = +2.9% difference
+- Speed improvement: 2x-3x faster inference across all models
+- Architecture simplicity: One prompt vs two sequential LLM calls
+- Resource efficiency: Lower memory usage, fewer model loads
 
-#### 💡 Production Recommendation
-**Switch to single-step approach with Llama-3.2-3B-Instruct**:
-- ✅ **Highest accuracy** (81.1%)
-- ✅ **Fastest inference** (0.829s)  
-- ✅ **Best cost efficiency** (smallest model size + fastest speed)
-- ✅ **Dramatic improvement** over current two-step implementation
+## Test Dataset Structure
 
----
+Uses **BFCL (Berkeley Function Calling Leaderboard) format** with 158 test cases covering:
 
-### Detailed Two-Step Evaluation Results (Historical Reference)
+- **Intent Classification**: All test cases evaluate chat vs action classification
+- **Function Calling**: Action cases evaluate function selection and parameter extraction
+- **Real API Integration**: Uses actual backend functions (see [Function Reference](#function-reference))
+- **Rich Parameter Extraction**: Natural language → structured function calls with parameters
 
-🏆 **TWO-STEP MODEL COMPARISON TABLE**
-========================================================================================================================
-| Model                     | Size (MB) | Step1 Acc | Step2 Acc | Overall | Step1 Time | Step2 Time | Status         |
-|---------------------------|-----------|-----------|-----------|---------|------------|------------|----------------|
-| **Phi-3.5-mini-instruct** | 2,052    | **81.7%** | **87.2%** | **77.3%** | 1.675s     | 3.215s     | ⚠️ **ACCEPTABLE** |
-| **gemma-2-2b-it**         | 1,420    | 79.7%     | 69.8%     | 73.4%   | 1.073s     | 1.768s     | ❌ **POOR**       |
-| **Llama-3.2-3B-Instruct** | 1,733    | 71.1%     | 75.2%     | 70.8%   | 0.772s     | 1.695s     | ❌ **POOR**       |
-
-### 📈 Two-Step Performance Summary
-
-- **Best Step 1 Accuracy**: 81.7% (Phi-3.5-mini-instruct)
-- **Best Step 2 Accuracy**: 87.2% (Phi-3.5-mini-instruct) 
-- **Best Overall Accuracy**: 77.3% (Phi-3.5-mini-instruct)
-- **Average Step 1**: 77.5%
-- **Average Step 2**: 77.4%
-- **Average Overall**: 73.8%
-
-### 💡 Key Findings & Recommendations
-
-#### 🏆 Phi-3.5-mini-instruct (BEST OVERALL)
-- **Highest overall accuracy** at 77.3% - best combined two-step performance
-- **Excellent Step 1 (Intent)** at 81.7% - best at distinguishing chat vs action
-- **Outstanding Step 2 (Function)** at 87.2% - superior function calling accuracy
-- **Larger model** at 2,052 MB but justified by superior accuracy
-- **Slower inference** but provides the most reliable intent detection
-- **Production recommended** - clear leader for two-step evaluation
-
-#### 🔬 gemma-2-2b-it (COMPACT BUT INCONSISTENT)
-- **Smallest model** at 1,420 MB - best resource efficiency
-- **Good Step 1 performance** at 79.7% - decent intent classification
-- **Poor Step 2 performance** at 69.8% - struggles with function calling
-- **Fastest total time** but inconsistent accuracy across steps
-- **Not recommended** - unreliable for production use
-
-#### 📱 Llama-3.2-3B-Instruct (UNDERPERFORMING)
-- **Previously strong single-step** but struggles with two-step approach
-- **Weak Step 1** at 71.1% - poor intent classification
-- **Mediocre Step 2** at 75.2% - average function calling
-- **Fast inference** but accuracy too low for reliable production use
-- **Not recommended** - significant accuracy regression in two-step evaluation
-
-## Test Dataset Structure (BFCL Format)
-
-The evaluation system now uses **BFCL (Berkeley Function Calling Leaderboard) compatible format** for comprehensive multi-phase evaluation:
-
-### Current Dataset: `bfcl_testcases.json`
-
+**Example Test Case**:
 ```json
 {
-  "metadata": {
-    "description": "Intent detection test cases using real get_thread_cards API for MCP evaluation",
-    "version": "1.0.0",
-    "format": "Berkeley Function Calling Leaderboard (BFCL) compatible",
-    "total_cases": 158,
-    "evaluation_phases": {
-      "intent_classification": "Phase 1: chat vs action (binary classification)",
-      "function_calling": "Phase 2: function selection and parameter extraction (action cases only)"
-    }
-  },
-  "functions": {
-    "get_thread_cards": {
-      "name": "get_thread_cards",
-      "description": "Get filtered thread cards from Hacker News discussions",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "keyword_filter": {"type": "string", "description": "Text to filter discussions"},
-          "hours_back": {"type": "integer", "description": "Hours to look back", "default": 168},
-          "sort_by": {"type": "string", "enum": ["karma_density", "recent", "comment_count"]},
-          "num_cards": {"type": "integer", "description": "Number of cards to return"},
-          "density_min_comment_constant": {"type": "integer", "description": "Quality threshold"}
-        },
-        "required": ["keyword_filter"]
-      }
-    },
-    "no_action": {
-      "name": "no_action",
-      "description": "No action required - conversational response",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "response_type": {"type": "string", "enum": ["greeting", "opinion", "explanation", "social"]}
-        },
-        "required": ["response_type"]
-      }
-    }
-  },
-  "test_cases": [
-    {
-      "id": "action_001",
-      "question": "find discussions about AI",
-      "category": "explicit_search",
-      "difficulty": "easy",
-      "intent_expected": "action",
-      "action_type_expected": "get_thread_cards",
-      "function": [...],
-      "expected_function_call": "get_thread_cards(keyword_filter='AI')",
-      "valid_alternatives": ["get_thread_cards(keyword_filter='artificial intelligence')"],
-      "evaluation_phases": ["intent_classification", "function_calling"]
-    }
-  ]
+  "id": "action_001",
+  "question": "find discussions about AI", 
+  "intent_expected": "action",
+  "expected_function_call": "get_thread_cards(keyword_filter='AI')"
 }
 ```
 
-### Key Improvements in BFCL Format
+## How to run evaluations
 
-**1. Real Backend API Integration**
-- Uses actual `get_thread_cards` function from Azure Functions backend
-- Parameters match real API: `keyword_filter`, `hours_back`, `sort_by`, `num_cards`, `density_min_comment_constant`
-- Enables realistic MCP server evaluation
-
-**2. Two-Phase Evaluation Support**
-- **Phase 1**: Intent classification (chat vs action) - evaluated on ALL test cases
-- **Phase 2**: Function calling with parameter extraction - evaluated on ACTION cases only
-
-**3. Rich Parameter Extraction**
-- "recent AI discussions" → `get_thread_cards(keyword_filter="AI", hours_back=168, sort_by="recent")`
-- "highly upvoted ML posts" → `get_thread_cards(keyword_filter="ML", density_min_comment_constant=10)`
-- "find 5 startup threads" → `get_thread_cards(keyword_filter="startup", num_cards=5)`
-
-## Expanding for Other Evaluation Types
-
-The BFCL format architecture is designed for extensibility. Here's how to add new evaluation types:
-
-### 1. Adding New Function Types
-
-Create new function schemas in the `functions` section:
-
-```json
-{
-  "functions": {
-    "analyze_trends": {
-      "name": "analyze_trends",
-      "description": "Analyze trends in HN discussions over time",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "topic": {"type": "string", "description": "Topic to analyze"},
-          "time_range": {"type": "string", "enum": ["week", "month", "quarter", "year"]},
-          "metric": {"type": "string", "enum": ["volume", "sentiment", "engagement"]}
-        },
-        "required": ["topic"]
-      }
-    },
-    "create_summary": {
-      "name": "create_summary",
-      "description": "Generate summaries of discussion threads",
-      "parameters": {
-        "type": "object", 
-        "properties": {
-          "thread_ids": {"type": "array", "items": {"type": "integer"}},
-          "format": {"type": "string", "enum": ["bullet_points", "paragraph", "timeline"]},
-          "max_length": {"type": "integer", "default": 500}
-        },
-        "required": ["thread_ids"]
-      }
-    }
-  }
-}
-```
-
-### 2. New Evaluation Phases
-
-Add specialized evaluation phases:
-
-```json
-{
-  "evaluation_phases": {
-    "intent_classification": "Phase 1: chat vs action (binary classification)",
-    "function_calling": "Phase 2: function selection and parameter extraction", 
-    "parameter_validation": "Phase 3: Parameter type and constraint checking (future)",
-    "semantic_equivalence": "Phase 4: Alternative parameter matching (future)"
-  }
-}
-```
-
-### 3. Domain-Specific Test Cases
-
-Create specialized test case categories:
-
-```json
-{
-  "test_cases": [
-    {
-      "id": "analyze_001",
-      "question": "show me how AI discussions evolved this quarter",
-      "category": "temporal_analysis",
-      "difficulty": "hard",
-      "intent_expected": "action",
-      "action_type_expected": "analyze_trends",
-      "expected_function_call": "analyze_trends(topic='AI', time_range='quarter', metric='volume')",
-      "evaluation_phases": ["intent_classification", "function_calling"]
-    }
-  ]
-}
-```
-
-### 4. Future Evaluation Framework Extensions
-
-**Multi-Modal Evaluation**
-- Image analysis requests
-- PDF document processing
-- Video content understanding
-
-**Conversational Context**
-- Multi-turn conversation evaluation
-- Context preservation across turns
-- Reference resolution ("find more like that")
-
-**MCP Server Integration**
-- Real backend MCP server calls
-- Tool orchestration evaluation
-- Multi-step reasoning assessment
-
-**Performance Benchmarks**
-- Latency under load
-- Memory usage profiling
-- Concurrent request handling
-
-## Usage in Extension
-
-### Intent Detection Flow
-
-#### Recommended: Single-Step Approach (Production)
-1. User message received in chat interface
-2. Message sent to `IntentDetector.detectIntent()`
-3. **Single LLM call**: Combined intent classification + function selection in one inference
-4. JSON response parsed for intent, function calls, parameters, and confidence
-5. Router directs to appropriate service (search, chat, or function execution)
-
-#### Alternative: Two-Step Approach (Historical)
-1. User message received in chat interface
-2. Message sent to `IntentDetector.detectIntent()`
-3. **Step 1**: Local LLM processes message with intent classification prompt
-4. **Step 2**: If action detected, second LLM call for function selection and parameter extraction
-5. JSON responses parsed for intent, function calls, and confidence scores
-6. Router directs to appropriate service (search, chat, or function execution)
-
-### Prompt Engineering
-
-#### Single-Step System (Recommended)
-- **Single Prompt** (`src/prompts/singleStep.ts`): Combined intent + function calling logic
-- **Unified workflow**: One inference handles both classification and parameter extraction
-- **Context awareness** for pinned thread scenarios  
-- **Structured JSON output** with intent, function, parameters, and confidence
-
-#### Two-Step System (Historical Reference)
-- **Step 1 Prompt** (`src/prompts/intentOnly.ts`): Intent classification with clear examples
-- **Step 2 Prompt** (`src/prompts/actionOnly.ts`): Function calling with parameter extraction
-- **Context awareness** for pinned thread scenarios
-- **Structured JSON output** specification for both steps
-
-## Prerequisites
-
-### UV Workflow Setup
-This project uses **uv** for Python environment and dependency management. The venv is created in the repo root so VSCode can auto-detect it.
-
+### Setup Environment
 ```bash
-# Create virtual environment (uses latest available Python)
+# Create virtual environment
 uv venv --python-preference only-managed
 
-# Or specify a specific Python version (uv will download if needed)
-uv venv --python 3.12
-
-# Install required MLC packages (both are required)
-# Option 1: Stable versions (CPU-only, recommended for stability)
+# Install MLC dependencies (choose one option)
+# Option 1: Stable (CPU-only, recommended)
 uv pip install --find-links https://mlc.ai/wheels mlc_llm_cpu==0.19.0 mlc_ai_cpu==0.19.0
 
-# Option 2: Nightly versions (bleeding edge, includes Metal GPU acceleration on Apple Silicon)
-uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly
-uv pip install --pre -f https://mlc.ai/wheels mlc-ai-nightly
+# Option 2: Nightly (includes Metal GPU on Apple Silicon)  
+uv pip install --pre -f https://mlc.ai/wheels mlc-llm-nightly mlc-ai-nightly
 
 # Install additional dependencies
 uv pip install tqdm
-
-# Run scripts using uv (automatically uses the venv)
-uv run python mlc_llm/model_wrapper.py
-uv run python mlc_llm/eval_intent_detection.py --full-eval
-
-# Or activate venv manually if preferred
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows
-python mlc_llm/model_wrapper.py
 ```
 
-### Required Dependencies
-The evaluation scripts require these packages:
-
-**Stable versions (CPU-only, recommended for stability):**
-- **mlc_llm_cpu==0.19.0**: Core MLC LLM inference engine (stable, CPU-only)
-- **mlc_ai_cpu==0.19.0**: Additional AI components (required with mlc-llm)
-
-**Nightly versions (bleeding edge, Metal GPU acceleration):**
-- **mlc-llm-nightly**: Core MLC LLM inference engine (latest features, includes Metal GPU support on Apple Silicon)
-- **mlc-ai-nightly**: Additional AI components (required with mlc-llm-nightly)
-
-**Additional dependencies:**
-- **tqdm**: Progress bar library
-
-### Model Setup
+### Download Models
 ```bash
-# Install git-lfs (required for model downloads)
-brew install git-lfs
-git lfs install
+# Install git-lfs
+brew install git-lfs && git lfs install
 
+# Download models to models/ directory
 cd models
-
-# Download recommended model
-git clone https://huggingface.co/mlc-ai/Phi-3.5-mini-instruct-q4f16_1-MLC
-
-# Download alternative model
 git clone https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC
-
+git clone https://huggingface.co/mlc-ai/Phi-3.5-mini-instruct-q4f16_1-MLC
 cd ..
 ```
 
-### TypeScript Prompt Requirement
-The evaluation scripts require the actual prompts from the TypeScript source:
+### Run Evaluations
+```bash
+# Quick smoke test (4 basic queries)
+uv run python mlc_llm/model_wrapper.py
 
-#### Single-Step Evaluation
-- Must have `src/prompts/singleStep.ts` with combined intent+function prompt
-- Ensures evaluation uses identical prompt as production system
+# Single-step evaluation (recommended)
+uv run python mlc_llm/eval_single_step.py --iterations 10 --quiet
 
-#### Two-Step Evaluation (Historical)
-- Must have `src/prompts/intentOnly.ts` with intent classification prompt
-- Must have `src/prompts/actionOnly.ts` with function calling prompt  
-- No fallback prompts - scripts exit if prompts cannot be loaded
-- Ensures evaluation uses identical prompts as two-step system
+# Two-step evaluation (for comparison)
+uv run python mlc_llm/eval_two_step.py --iterations 10 --quiet
 
-## Production Configuration
-
-### Current Extension Settings
-```typescript
-// src/config.ts
-DEFAULT_MODEL: "Llama-3.2-3B-Instruct-q4f16_1-MLC"  // ✅ OPTIMAL CHOICE
-
-// Updated based on single-step evaluation results - best overall accuracy (81.6%) + fastest (1.063s)
-// Previous: Phi-3.5-mini-instruct (77.3% two-step) → Now: Llama-3.2-3B (81.6% single-step) = +4.3% improvement
+# Test specific model
+uv run python mlc_llm/eval_single_step.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
 ```
 
-### Model Parameters
-```typescript
-temperature: 0.1,        // Low for consistent JSON output
-max_tokens: 500,         // Increased for reasoning models  
-stream: false           // Synchronous for intent detection
-```
+### Extending Evaluations
 
-## Development Workflow
+**Add New Test Cases**:
+1. Edit `bfcl_testcases.json` with new test cases
+2. Run evaluation to establish baseline
 
-### Adding New Test Cases
-1. Edit `bfcl_testcases.json` directly
-2. Add to appropriate evaluation phases
-3. Run evaluation to establish baseline
-4. Update production model if needed
+**Test New Models**:
+1. Download model to `models/` directory
+2. Run smoke test: `uv run python mlc_llm/model_wrapper.py --model <model-name>`
+3. Run full evaluation and compare results
 
-### Model Updates
-1. Download new model to `models/` directory
-2. Run smoke test with `uv run python mlc_llm/model_wrapper.py --model <model-name>`
-3. **Run single-step evaluation** with `uv run python mlc_llm/eval_single_step.py --iterations 10 --quiet` 
-4. Compare with two-step evaluation if needed: `uv run python mlc_llm/eval_two_step.py --iterations 10 --quiet`
-5. Update configuration if single-step overall accuracy improves
+**Add New Functions**:
+1. Define function schema in BFCL format
+2. Add test cases with expected function calls
+3. Update evaluation scripts for new functionality
 
-### Expanding Evaluation Framework
-1. Define new functions in BFCL format
-2. Create test cases with expected function calls
-3. Add evaluation phase support in testcase_loader
-4. Update evaluation script for new phases
-5. Run comprehensive evaluation
+### Requirements
+- **Prompts**: Evaluation scripts require `src/prompts/singleStep.ts` and `src/prompts/actionOnly.ts` from the TypeScript source
+- **Dataset**: Uses `bfcl_testcases.json` with 158 test cases
+- **Models**: Download models to `models/` directory using git-lfs
 
 ## Future Enhancements
 
 ### Planned Improvements
-- **Confidence-based routing** with threshold tuning
 - **Multi-step intent detection** for complex queries
 - **Contextual awareness** using conversation history
-- **A/B testing framework** for prompt variations
 
 ### MCP Integration Readiness
-- **Function calling patterns** prepared for MCP server integration
-- **Tool orchestration** architecture for agentic search
 - **Multi-step reasoning** capabilities for complex queries
-- **Backend connectivity** for historical data access
-- **BFCL compatibility** for industry-standard evaluation
+- **Function calling patterns** prepared for MCP server integration
