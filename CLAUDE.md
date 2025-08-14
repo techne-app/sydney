@@ -372,7 +372,7 @@ The extension uses a **two-step inference approach** with local AI models for in
 
 2. **Step 2: Function Selection** (`src/prompts/actionOnly.ts`) 
    - Executes only when Step 1 identifies "action" intent
-   - Selects specific function: `get_thread_cards` (search) or `summarize_pinned_thread`
+   - Selects appropriate function based on user intent (search functions or thread summarization)
    - Returns structured function calls with parameters
 
 ### Production Implementation

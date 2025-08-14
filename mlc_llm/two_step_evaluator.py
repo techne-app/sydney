@@ -189,14 +189,16 @@ class TwoStepEvaluator:
             return ''
     
     def _determine_expected_function(self, test_case: TestCase) -> str:
-        """Determine expected function based on test case"""
+        """Determine expected function based on test case data (single source of truth)"""
         if test_case.intent_expected == "chat":
             return "no_action"
-        elif test_case.category == "pinned_thread_summary":
-            return "summarize_pinned_thread"
-        else:
-            # For other action cases, assume search
-            return "get_thread_cards"
+        
+        # For action cases, use the dataset value directly
+        if test_case.action_type_expected:
+            return test_case.action_type_expected
+        
+        # Fallback for incomplete dataset (should not happen with complete data)
+        raise ValueError(f"Test case {test_case.id} has intent=action but no action_type_expected value")
     
     def _build_intent_prompt(self, test_case: TestCase) -> str:
         """Build step 1 intent detection prompt"""
@@ -275,7 +277,7 @@ class TwoStepEvaluator:
             if action_response:
                 action_parsed = self._parse_action_response(action_response)
                 if "error" not in action_parsed:
-                    step2_predicted = action_parsed.get('function', 'get_thread_cards')
+                    step2_predicted = action_parsed.get('function', 'search_threads')
                     step2_confidence = action_parsed.get('confidence', 0.0)
                     step2_reasoning = action_parsed.get('reasoning', '')
                     step2_correct = step2_predicted == function_expected

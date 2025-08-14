@@ -153,14 +153,16 @@ class SingleStepEvaluator:
             return ''
     
     def _determine_expected_function(self, test_case: TestCase) -> str:
-        """Determine expected function based on test case"""
+        """Determine expected function based on test case data (single source of truth)"""
         if test_case.intent_expected == "chat":
             return "no_action"
-        elif test_case.category == "pinned_thread_summary":
-            return "summarize_pinned_thread"
-        else:
-            # For other action cases, assume search
-            return "get_thread_cards"
+        
+        # For action cases, use the dataset value directly
+        if test_case.action_type_expected:
+            return test_case.action_type_expected
+        
+        # Fallback for incomplete dataset (should not happen with complete data)
+        raise ValueError(f"Test case {test_case.id} has intent=action but no action_type_expected value")
     
     def _build_single_step_prompt(self, test_case: TestCase) -> str:
         """Build single-step prompt"""
