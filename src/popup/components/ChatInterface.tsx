@@ -54,7 +54,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
   const [contextThreads, setContextThreads] = useState<ThreadCardData[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
-  const [tempStatus, setTempStatus] = useState<string | null>(null);
   const [toolOrchestrator] = useState(() => new ToolOrchestrator());
   const [pinnedCard, setPinnedCard] = useState<ThreadCardData | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -84,11 +83,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeConversation?.messages, streamingMessage]);
 
-  // Helper function to show temporary status messages
-  const showTempStatus = (message: string, duration: number = 2000) => {
-    setTempStatus(message);
-    setTimeout(() => setTempStatus(null), duration);
-  };
 
   // Helper function to handle tool execution using new AsyncGenerator pattern
   const handleToolExecution = async (
@@ -107,7 +101,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       for await (const progress of toolOrchestrator.executeTools(userMessage, context)) {
         switch (progress.type) {
           case 'status':
-            showTempStatus(progress.message || '', 1500);
+            // Status messages removed - no more temp status clutter
             break;
           case 'content':
             // Update streaming message with content
@@ -286,10 +280,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         await ConversationManager.updateConversationTitle(workingConversation.id, newTitle);
       }
 
-      // Get updated conversation
-      const updatedConversation = await ConversationManager.getConversation(workingConversation.id);
-      if (updatedConversation) {
-        onConversationUpdated(updatedConversation);
+      // Get conversation for chat history (before creating assistant message)
+      const conversationForHistory = await ConversationManager.getConversation(workingConversation.id);
+      if (conversationForHistory) {
+        onConversationUpdated(conversationForHistory);
       }
 
       // Create streaming assistant message
@@ -321,8 +315,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       // No tool was called, proceed with regular chat
       logger.chat('No tool executed, starting chat conversation...');
 
-      // Prepare chat history for the engine
-      const chatHistory: ChatCompletionMessageParam[] = updatedConversation?.messages.map(msg => ({
+      // Prepare chat history for the engine (using conversation fetched before assistant message creation)
+      const chatHistory: ChatCompletionMessageParam[] = conversationForHistory?.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant',
         content: msg.content
       })) || [];
@@ -733,12 +727,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   <span>{getUserFriendlyErrorMessage(error)}</span>
                 </div>
               )}
-              {tempStatus && !isModelLoading && !error && (
-                <div className="text-xs transition-opacity duration-200" style={{ color: 'var(--hn-blue)' }}>
-                  {tempStatus}
-                </div>
-              )}
-              {!tempStatus && !isModelLoading && !error && (
+              {!isModelLoading && !error && (
                 <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                   💬 Chat, search, or pin a thread for context
                 </div>
