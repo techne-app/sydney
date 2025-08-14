@@ -6,11 +6,18 @@ import { logger } from '../logger';
 export class SearchTool implements Tool {
   name = 'search';
 
-  async execute(input: SearchToolInput, context: ToolContext): Promise<ToolResult> {
+  async execute(input: SearchToolInput, context: any): Promise<ToolResult> {
     try {
       logger.search('SearchTool executing with:', input.keyword_filter);
       
-      // Show search status if status update handler available
+      // Pure tool context (new approach)
+      const pureContext: ToolContext = {
+        conversationId: context.conversationId,
+        messageId: context.messageId,
+        pinnedThread: context.pinnedThread
+      };
+      
+      // Show search status if legacy callback available
       if (context.onStatusUpdate) {
         context.onStatusUpdate(`🔍 Searching for "${input.keyword_filter}"...`, 1500);
       }
@@ -18,31 +25,32 @@ export class SearchTool implements Tool {
       // Update streaming message and database with search status
       const searchStatusContent = `🔍 Searching for "${input.keyword_filter}"...`;
       
+      // Legacy progress callback
       if (context.onProgress) {
         await context.onProgress(searchStatusContent);
       }
       
-      // Update the database message with search status
+      // Always update database regardless of UI callbacks
       await ConversationManager.updateMessage(
-        context.conversationId,
-        context.messageId,
+        pureContext.conversationId,
+        pureContext.messageId,
         searchStatusContent
       );
       
-      // Execute search with streaming
+      // Execute search with streaming, but without UI coupling
       await SearchService.executeSearchStreaming(input.keyword_filter, async (content) => {
         try {
           logger.debug('SearchTool received content update:', content.substring(0, 50) + '...');
           
-          // Update streaming via progress callback
+          // Legacy progress callback
           if (context.onProgress) {
             await context.onProgress(content);
           }
           
-          // Update database with current content
+          // Always update database regardless of UI callbacks
           await ConversationManager.updateMessage(
-            context.conversationId,
-            context.messageId,
+            pureContext.conversationId,
+            pureContext.messageId,
             content
           );
           
@@ -65,13 +73,21 @@ export class SearchTool implements Tool {
       // Update the assistant message with error content
       const errorContent = `I encountered an error while searching for "${input.keyword_filter}": ${error instanceof Error ? error.message : 'Unknown error'}`;
       
+      // Legacy progress callback
       if (context.onProgress) {
         await context.onProgress(errorContent);
       }
       
+      // Always update database regardless of UI callbacks
+      const pureContext: ToolContext = {
+        conversationId: context.conversationId,
+        messageId: context.messageId,
+        pinnedThread: context.pinnedThread
+      };
+      
       await ConversationManager.updateMessage(
-        context.conversationId,
-        context.messageId,
+        pureContext.conversationId,
+        pureContext.messageId,
         errorContent
       );
       

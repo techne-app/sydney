@@ -260,36 +260,61 @@ cd ..
 # Quick smoke test (4 basic queries)
 uv run python mlc_llm/model_wrapper.py
 
-# Single-step evaluation (recommended)
-uv run python mlc_llm/eval_single_step.py --iterations 10 --quiet
+# Run both evaluations with comparison (recommended)
+uv run python mlc_llm/eval.py --iterations 10 --quiet
 
-# Two-step evaluation (for comparison)
-uv run python mlc_llm/eval_two_step.py --iterations 10 --quiet
+# Single-step evaluation only
+uv run python mlc_llm/eval.py --mode single --iterations 10 --quiet
 
-# Test specific model
-uv run python mlc_llm/eval_single_step.py --model "Phi-3.5-mini-instruct-q4f16_1-MLC"
+# Two-step evaluation only
+uv run python mlc_llm/eval.py --mode two --iterations 10 --quiet
+
+# Test with specific settings
+uv run python mlc_llm/eval.py --temp 0.2 --iterations 5 --dataset pinned_thread_summary
 ```
+
+### Results Storage
+
+All evaluation results are automatically timestamped and stored in `mlc_llm/past_evals/` for historical tracking:
+
+```
+mlc_llm/past_evals/
+├── single_step_2025-08-14_10-30-15.json     # Single-step evaluation results
+├── two_step_2025-08-14_10-30-15.json        # Two-step evaluation results  
+└── comparison_2025-08-14_10-30-15.json      # Comparative analysis (when both run)
+```
+
+This enables:
+- **Historical Performance Tracking**: Compare model performance over time
+- **Like-for-Like Comparisons**: Same timestamp ensures identical evaluation conditions
+- **Regression Detection**: Identify when changes impact model performance
+- **Result Archival**: All evaluation data preserved for future analysis
 
 ### Extending Evaluations
 
 **Add New Test Cases**:
 1. Edit `bfcl_testcases.json` with new test cases
-2. Run evaluation to establish baseline
+2. Run unified evaluation: `uv run python mlc_llm/eval.py --iterations 10`
+3. Compare results with previous evaluations in `past_evals/`
 
 **Test New Models**:
 1. Download model to `models/` directory
 2. Run smoke test: `uv run python mlc_llm/model_wrapper.py --model <model-name>`
-3. Run full evaluation and compare results
+3. Run full evaluation: `uv run python mlc_llm/eval.py --iterations 10`
+4. Check timestamped results in `past_evals/` for performance comparison
 
 **Add New Functions**:
 1. Define function schema in BFCL format
 2. Add test cases with expected function calls
-3. Update evaluation scripts for new functionality
+3. Update prompts in `src/prompts/` if needed
+4. Run evaluation to verify new function handling
 
 ### Requirements
-- **Prompts**: Evaluation scripts require `src/prompts/singleStep.ts` and `src/prompts/actionOnly.ts` from the TypeScript source
+- **Unified Script**: Use `eval.py` for all evaluations (replaces separate single-step/two-step scripts)
+- **Prompts**: Evaluation requires `src/prompts/singleStep.ts` and `src/prompts/actionOnly.ts` from the TypeScript source
 - **Dataset**: Uses `bfcl_testcases.json` with 157 test cases
 - **Models**: Download models to `models/` directory using git-lfs
+- **Results**: Timestamped results automatically saved to `past_evals/` directory
 
 ## Future Enhancements
 

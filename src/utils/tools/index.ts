@@ -5,9 +5,7 @@ export { ThreadContextService } from '../ThreadContextService';
 export type { 
   Tool, 
   ToolResult, 
-  ToolContext, 
-  ElicitationRequest,
+  ToolContext,
   SearchToolInput,
   ThreadSummaryToolInput 
 } from './types';
-export type { ToolExecutionResult } from './ToolOrchestrator';

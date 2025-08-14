@@ -6,8 +6,10 @@ import { webLLMClient } from '../../utils/webLLMClient';
 import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
 import { ToolOrchestrator } from '../../utils/tools';
+import { ToolExecutionContext } from '../../utils/tools/toolExecution';
 import { ThreadContextService } from '../../utils/ThreadContextService';
 import { logger } from '../../utils/logger';
+import { modelState } from '../../utils/modelState';
 import { Modal } from './Modal';
 import { ActivityPage } from './ActivityPage';
 import { SettingsPage } from './SettingsPage';
@@ -66,6 +68,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   }, [activeConversation]);
 
+  // Subscribe to model state changes (new observable pattern)
+  useEffect(() => {
+    const unsubscribe = modelState.subscribe((state) => {
+      setIsModelLoading(state.isLoading);
+      setModelLoadingProgress(state.progress);
+      // Could also update other UI state based on model status
+    });
+
+    return unsubscribe;
+  }, []);
+
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -75,6 +88,65 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const showTempStatus = (message: string, duration: number = 2000) => {
     setTempStatus(message);
     setTimeout(() => setTempStatus(null), duration);
+  };
+
+  // Helper function to handle tool execution using new AsyncGenerator pattern
+  const handleToolExecution = async (
+    userMessage: string, 
+    workingConversation: Conversation, 
+    assistantMessage: ChatMessage
+  ): Promise<boolean> => {
+    try {
+      const context: ToolExecutionContext = {
+        conversationId: workingConversation.id,
+        messageId: assistantMessage.id,
+        pinnedThread: pinnedCard
+      };
+
+      // Use new AsyncGenerator approach
+      for await (const progress of toolOrchestrator.executeTools(userMessage, context)) {
+        switch (progress.type) {
+          case 'status':
+            showTempStatus(progress.message || '', 1500);
+            break;
+          case 'content':
+            // Update streaming message with content
+            setStreamingMessage(prev => prev ? {
+              ...prev,
+              content: progress.message || '',
+              isStreaming: true
+            } : null);
+            break;
+          case 'complete':
+            // Tool execution completed
+            const wasToolCalled = progress.data?.wasToolCalled || (progress.data?.success !== undefined);
+            if (wasToolCalled) {
+              // Finalize the streaming message
+              setStreamingMessage(prev => prev ? {
+                ...prev,
+                isStreaming: false
+              } : null);
+              
+              // Get final updated conversation after tool execution
+              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+              if (finalConversation) {
+                onConversationUpdated(finalConversation);
+              }
+              
+              setStreamingMessage(null);
+              return true; // Tool was called
+            }
+            return false; // No tool was called
+          case 'error':
+            logger.error('Tool execution error:', progress.error);
+            return false;
+        }
+      }
+    } catch (error) {
+      logger.error('Tool orchestration failed:', error);
+      return false;
+    }
+    return false;
   };
 
   // Reusable function to create new conversation (as draft)
@@ -181,7 +253,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
 
   const handleSubmit = async () => {
-    if (!message.trim() || !activeConversation || isModelLoading) return;
+    if (!message.trim() || !activeConversation) return;
 
     const userMessage = message.trim();
     setMessage('');
@@ -220,7 +292,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         onConversationUpdated(updatedConversation);
       }
 
-      // Create streaming assistant message for regular chat
+      // Create streaming assistant message
       const assistantMessage = await ConversationManager.addMessage(
         workingConversation.id, 
         'assistant', 
@@ -229,176 +301,76 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       );
       setStreamingMessage(assistantMessage);
 
+      // Get current config
+      const config = await configStore.getConfig();
+      setLoadedModelName(MODEL_OPTIONS.find(m => m.value === config.model)?.name || config.model);
+
+      // Check if model is already loaded
+      const isModelLoaded = webLLMClient.isModelLoaded();
+      logger.model('Model loaded check:', isModelLoaded);
+      
+      // Try tool execution first (works whether model is loaded or not)
+      logger.model('Checking for tool execution...');
+      const toolWasCalled = await handleToolExecution(userMessage, workingConversation, assistantMessage);
+      
+      if (toolWasCalled) {
+        logger.debug('Tool was executed, stopping here');
+        return; // Tool handled the response, we're done
+      }
+
+      // No tool was called, proceed with regular chat
+      logger.chat('No tool executed, starting chat conversation...');
+
       // Prepare chat history for the engine
       const chatHistory: ChatCompletionMessageParam[] = updatedConversation?.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant',
         content: msg.content
       })) || [];
 
-      // Get current config
-      const config = await configStore.getConfig();
-      setLoadedModelName(MODEL_OPTIONS.find(m => m.value === config.model)?.name || config.model);
-
-
-      // Check if model is already loaded by checking webLLMClient state
-      const isModelLoaded = webLLMClient.isModelLoaded();
-      logger.model('Model loaded check:', isModelLoaded);
-      
-      if (isModelLoaded) {
-        logger.model('Model already loaded, checking for tool execution...');
-        try {
-          // Use ToolOrchestrator to handle message and potentially execute tools
-          const toolResult = await toolOrchestrator.handleMessage(userMessage, {
-            conversationId: workingConversation.id,
-            messageId: assistantMessage.id,
-            pinnedThread: pinnedCard,
-            onProgress: async (content) => {
-              // Update streaming message state
-              setStreamingMessage(prev => prev ? {
-                ...prev,
-                content,
-                isStreaming: true
-              } : null);
-            },
-            onStatusUpdate: showTempStatus
-          });
-          
-          if (toolResult.wasToolCalled) {
-            logger.debug('Tool was executed, finalizing...');
-            
-            // Finalize the streaming message
+      // Use WebLLM client for chat (model loading handled by observable)
+      try {
+        await webLLMClient.chat({
+          messages: chatHistory,
+          config: {
+            model: config.model,
+            temperature: config.temperature,
+            topP: config.topP,
+            maxTokens: config.maxTokens,
+            stream: true,
+          },
+          onUpdate: (message) => {
+            // Update streaming message
             setStreamingMessage(prev => prev ? {
               ...prev,
-              isStreaming: false
+              content: message
             } : null);
+          },
+          onFinish: async (message) => {
+            // Update the message in the database
+            await ConversationManager.updateMessage(workingConversation.id, assistantMessage.id, message);
             
-            // Get final updated conversation after tool execution
+            // Get final updated conversation
             const finalConversation = await ConversationManager.getConversation(workingConversation.id);
             if (finalConversation) {
               onConversationUpdated(finalConversation);
             }
-            
-            // Clear streaming and exit early - tool handled the response
+
             setStreamingMessage(null);
-            return;
-          } else {
-            logger.chat('No tool executed, continuing with chat. Confidence:', toolResult.functionResult?.confidence);
+          },
+          onError: (errorMessage) => {
+            logger.error('WebLLM chat error:', errorMessage);
+            setError(getUserFriendlyErrorMessage(errorMessage));
+            setStreamingMessage(null);
           }
-        } catch (error) {
-          logger.error('Tool orchestration failed:', error);
-        }
-      } else {
-        logger.model('Model not loaded, will perform tool detection after loading');
-      }
-
-      // Only proceed with chat if we didn't intercept for search
-      logger.chat('Starting chat conversation...');
-
-      // Use WebLLM client with web-llm-chat patterns
-      try {
-        await webLLMClient.chat({
-        messages: chatHistory,
-        config: {
-          model: config.model,
-          temperature: config.temperature,
-          topP: config.topP,
-          maxTokens: config.maxTokens,
-          stream: true,
-        },
-        // Only show loading UI if model actually needs to load
-        onModelLoadingStart: !isModelLoaded ? () => {
-          setIsModelLoading(true);
-          setModelLoadingProgress(0);
-        } : undefined,
-        onModelLoadingProgress: !isModelLoaded ? (progress) => {
-          setModelLoadingProgress(progress);
-        } : undefined,
-        onModelLoadingComplete: !isModelLoaded ? async () => {
-          setIsModelLoading(false);
-          setModelLoadingProgress(1);
-          
-          // Perform tool detection after model loads
-          logger.model('Model loading complete, now checking for tool execution...');
-          try {
-            // Use ToolOrchestrator to handle message and potentially execute tools
-            const toolResult = await toolOrchestrator.handleMessage(userMessage, {
-              conversationId: workingConversation.id,
-              messageId: assistantMessage.id,
-              pinnedThread: pinnedCard,
-              onProgress: async (content) => {
-                // Update streaming message state
-                setStreamingMessage(prev => prev ? {
-                  ...prev,
-                  content,
-                  isStreaming: true
-                } : null);
-              },
-              onStatusUpdate: showTempStatus
-            });
-            
-            if (toolResult.wasToolCalled) {
-              logger.debug('Tool was executed after model load, aborting chat...');
-              
-              // Finalize the streaming message
-              setStreamingMessage(prev => prev ? {
-                ...prev,
-                isStreaming: false
-              } : null);
-              
-              // Get final updated conversation after tool execution
-              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-              if (finalConversation) {
-                onConversationUpdated(finalConversation);
-              }
-              
-              // Clear streaming and abort chat
-              setStreamingMessage(null);
-              return false; // Abort chat
-            } else {
-              logger.chat('No tool executed after model load, continuing with chat. Confidence:', toolResult.functionResult?.confidence);
-            }
-          } catch (error) {
-            logger.error('Tool orchestration after model load failed:', error);
-          }
-          
-          return true; // Continue with chat
-        } : undefined,
-        onUpdate: (message) => {
-          // Update streaming message
-          setStreamingMessage(prev => prev ? {
-            ...prev,
-            content: message
-          } : null);
-        },
-        onFinish: async (message) => {
-          // Update the message in the database
-          await ConversationManager.updateMessage(workingConversation.id, assistantMessage.id, message);
-          
-          // Get final updated conversation
-          const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-          if (finalConversation) {
-            onConversationUpdated(finalConversation);
-          }
-
-          setStreamingMessage(null);
-        },
-        onError: (errorMessage) => {
-          logger.error('WebLLM chat error:', errorMessage);
-          setError(errorMessage);
-          setStreamingMessage(null);
-          setIsModelLoading(false);
-        }
         });
       } catch (error) {
         logger.error('WebLLM chat failed:', error);
-        setIsModelLoading(false);
         setError('Chat failed to start');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to get response');
       logger.error('Error during chat:', err);
       setStreamingMessage(null);
-      setIsModelLoading(false);
     } finally {
       setIsLoading(false);
     }

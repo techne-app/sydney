@@ -6,7 +6,7 @@ jest.mock('@mlc-ai/web-llm', () => ({
   prebuiltAppConfig: {}
 }));
 
-import { IntentDetector, FunctionCallingResult } from './intentDetectorSingleStep';
+import { IntentDetector, FunctionCallingResult } from './intentDetector';
 import { webLLMClient } from './webLLMClient';
 import { configStore } from './configStore';
 import { ThreadCardData } from '../types/chat';
@@ -64,7 +64,7 @@ describe('IntentDetector', () => {
           parameters: { keyword_filter: 'AI' }
         },
         confidence: 0.8,
-        reasoning: 'Search for discussions'
+        reasoning: 'Intent: Search for discussions; Function: Search for discussions'
       });
     });
 
@@ -90,7 +90,7 @@ describe('IntentDetector', () => {
         return Promise.resolve();
       });
 
-      const result = await IntentDetector.detectIntent('summarize this thread', undefined, pinnedThread);
+      const result = await IntentDetector.detectIntent('summarize this thread', pinnedThread);
 
       expect(result).toEqual({
         intent: 'action',
@@ -99,42 +99,46 @@ describe('IntentDetector', () => {
           parameters: { format: 'paragraph' }
         },
         confidence: 0.9,
-        reasoning: 'Process pinned thread'
+        reasoning: 'Intent: Process pinned thread; Function: Process pinned thread'
       });
     });
 
-    test('calls webLLMClient with correct parameters for single step', async () => {
-      const singleStepResponse = '{"intent": "action", "function": "search_threads", "confidence": 0.8}';
+    test('calls webLLMClient properly for two-step approach', async () => {
+      // Return 'action' for first step to trigger second step
+      const intentResponse = '{"intent": "action", "confidence": 0.8}';
+      const actionResponse = '{"function": "search_threads", "parameters": {"keyword_filter": "test"}, "confidence": 0.8}';
       
+      let callCount = 0;
       mockWebLLMClient.chat.mockImplementation(({ onFinish }) => {
-        setTimeout(() => onFinish?.(singleStepResponse), 0);
+        setTimeout(() => {
+          callCount++;
+          if (callCount === 1) {
+            onFinish?.(intentResponse); // First call: intent detection
+          } else {
+            onFinish?.(actionResponse); // Second call: action selection  
+          }
+        }, 0);
         return Promise.resolve();
       });
 
       await IntentDetector.detectIntent('test message');
 
-      // Should be called once for single-step approach
-      expect(mockWebLLMClient.chat).toHaveBeenCalledTimes(1);
+      // Should be called twice for two-step approach (intent detection + action selection)
+      expect(mockWebLLMClient.chat).toHaveBeenCalledTimes(2);
       
-      // Check the call parameters
-      expect(mockWebLLMClient.chat).toHaveBeenCalledWith({
-        messages: [
-          {
-            role: 'user',
-            content: expect.stringContaining('test message')
-          }
-        ],
-        config: {
-          model: 'test-model',
-          temperature: 0.1,
-          topP: 0.9,
-          maxTokens: 300, // Single-step uses 300 tokens
-          stream: true
-        },
-        onUpdate: expect.any(Function),
-        onFinish: expect.any(Function),
-        onError: expect.any(Function)
-      });
+      // Verify basic structure of calls
+      expect(mockWebLLMClient.chat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            model: 'test-model',
+            temperature: 0.1,
+            stream: true
+          }),
+          onUpdate: expect.any(Function),
+          onFinish: expect.any(Function),
+          onError: expect.any(Function)
+        })
+      );
     });
 
     test('handles parsing errors gracefully', async () => {
@@ -154,32 +158,33 @@ describe('IntentDetector', () => {
           parameters: { response_type: 'explanation' }
         },
         confidence: 0.0,
-        reasoning: 'Failed to parse LLM response, defaulting to chat'
+        reasoning: 'Failed to parse LLM response'
       });
     });
 
 
-    test('calls callbacks for model loading progress', async () => {
+    test('works without UI callbacks (pure business logic)', async () => {
       const intentResponse = '{"intent": "chat", "confidence": 0.9}';
-      const onModelLoading = jest.fn();
-      const onModelProgress = jest.fn();
       
       mockWebLLMClient.chat.mockImplementation(({ onUpdate, onFinish }) => {
         setTimeout(() => {
-          onUpdate?.('', 'Loading... 50%');
+          onUpdate?.('', '');  // Empty parameters for compatibility
           onFinish?.(intentResponse);
         }, 0);
         return Promise.resolve();
       });
 
-      await IntentDetector.detectIntent('test message', {
-        onModelLoading,
-        onModelProgress
-      });
+      const result = await IntentDetector.detectIntent('test message');
 
-      expect(onModelLoading).toHaveBeenCalledWith(true);
-      expect(onModelProgress).toHaveBeenCalledWith(0, 'Loading... 50%');
-      expect(onModelLoading).toHaveBeenCalledWith(false);
+      expect(result).toEqual({
+        intent: 'chat',
+        functionCall: {
+          name: 'no_action',
+          parameters: { response_type: 'explanation' }
+        },
+        confidence: 0.9,
+        reasoning: 'Classified as conversational'
+      });
     });
 
     test('includes pinned thread context in prompts', async () => {
@@ -204,7 +209,7 @@ describe('IntentDetector', () => {
         return Promise.resolve();
       });
 
-      await IntentDetector.detectIntent('test message', undefined, pinnedThread);
+      await IntentDetector.detectIntent('test message', pinnedThread);
 
       // Check that the prompt includes pinned thread context
       expect(mockWebLLMClient.chat).toHaveBeenCalledWith(

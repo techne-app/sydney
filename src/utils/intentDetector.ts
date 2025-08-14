@@ -17,10 +17,6 @@ export interface FunctionCallingResult {
   reasoning?: string;
 }
 
-export interface IntentDetectionCallbacks {
-  onModelLoading?: (isLoading: boolean) => void;
-  onModelProgress?: (progress: number, text: string) => void;
-}
 
 /**
  * Clean two-step intent detection using context-aware prompts.
@@ -36,19 +32,17 @@ export class IntentDetector {
    * This is the only public API - all other approaches have been removed.
    * 
    * @param message - User message to analyze
-   * @param callbacks - Optional callbacks for loading state
    * @param pinnedThread - Optional pinned thread context
    * @returns Promise<FunctionCallingResult>
    */
   static async detectIntent(
     message: string,
-    callbacks?: IntentDetectionCallbacks,
     pinnedThread?: ThreadCardData | null
   ): Promise<FunctionCallingResult> {
     logger.model('Starting two-step intent detection for message:', message);
     
     // Step 1: Intent detection (action vs chat)
-    const intentResult = await this._detectIntentOnly(message, callbacks, pinnedThread);
+    const intentResult = await this._detectIntentOnly(message, pinnedThread);
     logger.intent('Step 1 - Intent detection result:', intentResult);
     
     if (intentResult.intent === 'chat') {
@@ -65,7 +59,7 @@ export class IntentDetector {
     }
     
     // Step 2: Select function for action intent
-    const actionResult = await this._detectActionOnly(message, callbacks, pinnedThread);
+    const actionResult = await this._detectActionOnly(message, pinnedThread);
     logger.intent('Step 2 - Action selection result:', actionResult);
     
     return {
@@ -82,11 +76,10 @@ export class IntentDetector {
    */
   private static async _detectIntentOnly(
     message: string,
-    callbacks?: IntentDetectionCallbacks,
     pinnedThread?: ThreadCardData | null
   ): Promise<{ intent: 'action' | 'chat'; confidence: number; reasoning?: string }> {
     const prompt = this._buildIntentOnlyPrompt(message, pinnedThread);
-    const response = await this._queryLLM(prompt, callbacks);
+    const response = await this._queryLLM(prompt);
     return this._parseIntentOnlyResponse(response);
   }
 
@@ -96,11 +89,10 @@ export class IntentDetector {
    */
   private static async _detectActionOnly(
     message: string,
-    callbacks?: IntentDetectionCallbacks,
     pinnedThread?: ThreadCardData | null
   ): Promise<{ functionCall: FunctionCall; confidence: number; reasoning?: string }> {
     const prompt = this._buildActionOnlyPrompt(message, pinnedThread);
-    const response = await this._queryLLM(prompt, callbacks);
+    const response = await this._queryLLM(prompt);
     return this._parseActionOnlyResponse(response);
   }
 
@@ -147,13 +139,10 @@ export class IntentDetector {
    * Query LLM for intent detection
    * @private - Internal method
    */
-  private static async _queryLLM(prompt: string, callbacks?: IntentDetectionCallbacks): Promise<string> {
+  private static async _queryLLM(prompt: string): Promise<string> {
     const config = await configStore.getConfig();
     
     return new Promise((resolve, reject) => {
-      // Signal model loading start
-      callbacks?.onModelLoading?.(true);
-      
       webLLMClient.chat({
         messages: [
           { role: 'user', content: prompt }
@@ -165,26 +154,13 @@ export class IntentDetector {
           maxTokens: 200,
           stream: true
         },
-        onUpdate: (_, chunk) => {
-          // Handle model loading progress
-          if (chunk && (chunk.includes('Loading') || chunk.includes('Initializing') || chunk.includes('%'))) {
-            callbacks?.onModelProgress?.(0, chunk);
-            // Try to extract progress percentage
-            const progressMatch = chunk.match(/(\\d+)%/);
-            if (progressMatch) {
-              callbacks?.onModelProgress?.(parseInt(progressMatch[1]) / 100, chunk);
-            }
-          } else {
-            // Model loading complete when we get actual content
-            callbacks?.onModelLoading?.(false);
-          }
+        onUpdate: () => {
+          // Model loading progress handled by webLLMClient internally
         },
         onFinish: (finalMessage) => {
-          callbacks?.onModelLoading?.(false);
           resolve(finalMessage);
         },
         onError: (error) => {
-          callbacks?.onModelLoading?.(false);
           reject(new Error(error));
         }
       });

@@ -5,6 +5,7 @@ import {
   prebuiltAppConfig
 } from "@mlc-ai/web-llm";
 import { logger } from './logger';
+import { modelState } from './modelState';
 
 export interface ChatOptions {
   messages: ChatCompletionMessageParam[];
@@ -18,9 +19,6 @@ export interface ChatOptions {
   onUpdate?: (message: string, chunk: string) => void;
   onFinish?: (message: string) => void;
   onError?: (error: string) => void;
-  onModelLoadingStart?: () => void;
-  onModelLoadingProgress?: (progress: number, text: string) => void;
-  onModelLoadingComplete?: () => Promise<boolean>; // Return false to abort chat
 }
 
 interface LLMConfig {
@@ -40,17 +38,13 @@ export class WebLLMClient {
     // Initialize with default config
   }
 
-  private async initModel(options?: {
-    onUpdate?: (message: string, chunk: string) => void;
-    onModelLoadingStart?: () => void;
-    onModelLoadingProgress?: (progress: number, text: string) => void;
-    onModelLoadingComplete?: () => Promise<boolean>;
-  }): Promise<boolean> {
+  private async initModel(): Promise<void> {
     if (!this.llmConfig) {
       throw Error("llmConfig is undefined");
     }
 
-    options?.onModelLoadingStart?.();
+    // Signal model loading start
+    modelState.setLoading(true, 'Initializing model...');
 
     // Create engine config with Cache API (Chrome recommended for AI models)
     const engineConfig = {
@@ -59,8 +53,8 @@ export class WebLLMClient {
         useIndexedDBCache: false, // Use Cache API as recommended by Chrome
       },
       initProgressCallback: (report: InitProgressReport) => {
-        // Only send progress to model loading callback, not to chat update
-        options?.onModelLoadingProgress?.(report.progress || 0, report.text);
+        // Update global model state
+        modelState.setProgress(report.progress || 0, report.text);
       }
     };
 
@@ -70,8 +64,7 @@ export class WebLLMClient {
     );
 
     this.initialized = true;
-    const shouldContinue = await options?.onModelLoadingComplete?.();
-    return shouldContinue !== false;
+    modelState.setLoaded(true);
   }
 
   private isDifferentConfig(config: LLMConfig): boolean {
@@ -107,23 +100,14 @@ export class WebLLMClient {
       this.llmConfig = { ...(this.llmConfig || {}), ...config };
       
       try {
-        const shouldContinue = await this.initModel({
-          onUpdate: options.onUpdate,
-          onModelLoadingStart: options.onModelLoadingStart,
-          onModelLoadingProgress: options.onModelLoadingProgress,
-          onModelLoadingComplete: options.onModelLoadingComplete
-        });
-        
-        if (!shouldContinue) {
-          // Model loading completed but chat should be aborted
-          return;
-        }
+        await this.initModel();
       } catch (err: any) {
         let errorMessage = err.message || err.toString() || "";
         if (errorMessage === "[object Object]") {
           errorMessage = JSON.stringify(err);
         }
         logger.error('Error while initializing the model', errorMessage);
+        modelState.setLoading(false, `Error: ${errorMessage}`);
         options?.onError?.(errorMessage);
         return;
       }
@@ -173,21 +157,13 @@ export class WebLLMClient {
         logger.model('Port disconnected, attempting to reinitialize and retry');
         try {
           await this.reset();
-          const shouldContinue = await this.initModel({
-            onUpdate: options.onUpdate,
-            onModelLoadingStart: options.onModelLoadingStart,
-            onModelLoadingProgress: options.onModelLoadingProgress,
-            onModelLoadingComplete: options.onModelLoadingComplete
-          });
-          
-          if (!shouldContinue) {
-            return;
-          }
+          await this.initModel();
           
           // Retry the chat once after reconnection
           return this.chat(options);
         } catch (retryErr: any) {
           logger.error('Failed to reconnect and retry:', retryErr);
+          modelState.setLoading(false, "Connection lost");
           options.onError?.("Connection lost. Please try again.");
           return;
         }
@@ -202,6 +178,7 @@ export class WebLLMClient {
     this.initialized = false;
     this.llmConfig = undefined;
     this.engine = null;
+    modelState.setLoaded(false);
   }
 
   isModelLoaded(): boolean {

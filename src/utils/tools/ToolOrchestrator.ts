@@ -1,14 +1,13 @@
-import { Tool, ToolResult, ToolContext } from './types';
+import { Tool, ToolContext } from './types';
+import { 
+  ToolExecutionContext, 
+  ToolProgressEvent
+} from './toolExecution';
 import { SearchTool } from './SearchTool';
 import { ThreadSummaryTool } from './ThreadSummaryTool';
-import { IntentDetector, FunctionCallingResult } from '../intentDetectorSingleStep';
+import { IntentDetector } from '../intentDetector';
 import { logger } from '../logger';
 
-export interface ToolExecutionResult {
-  wasToolCalled: boolean;
-  result?: ToolResult;
-  functionResult?: FunctionCallingResult;
-}
 
 export class ToolOrchestrator {
   private tools: Map<string, Tool> = new Map();
@@ -25,22 +24,22 @@ export class ToolOrchestrator {
   }
 
   /**
-   * Analyze user message and execute appropriate tool if action intent is detected
+   * Pure tool execution using AsyncGenerator pattern (new approach)
    * @param userMessage - The user's message
-   * @param context - Tool execution context
-   * @returns Promise<ToolExecutionResult>
+   * @param context - Pure tool execution context
+   * @returns AsyncGenerator<ToolProgressEvent, void, unknown>
    */
-  async handleMessage(userMessage: string, context: ToolContext): Promise<ToolExecutionResult> {
+  async* executeTools(
+    userMessage: string, 
+    context: ToolExecutionContext
+  ): AsyncGenerator<ToolProgressEvent, void, unknown> {
     try {
-      // Show temporary status while detecting intent
-      if (context.onStatusUpdate) {
-        context.onStatusUpdate('💭 Understanding your request...', 800);
-      }
-
-      // Use existing IntentDetector to determine if this is an action
+      // Yield status while detecting intent
+      yield { type: 'status', message: '💭 Understanding your request...' };
+      
+      // Use IntentDetector to determine if this is an action
       const functionResult = await IntentDetector.detectIntent(
         userMessage, 
-        undefined, 
         context.pinnedThread
       );
       
@@ -58,57 +57,46 @@ export class ToolOrchestrator {
         const tool = this.tools.get(functionName);
         if (!tool) {
           logger.error(`No tool registered for function: ${functionName}`);
-          return {
-            wasToolCalled: false,
-            functionResult
+          yield { 
+            type: 'error', 
+            error: `No tool registered for function: ${functionName}` 
           };
+          return;
         }
         
-        // Execute the tool
-        const result = await tool.execute(parameters, context);
+        // Execute the tool (legacy approach, we'll update tools later)
+        const legacyContext: ToolContext = {
+          conversationId: context.conversationId,
+          messageId: context.messageId,
+          pinnedThread: context.pinnedThread
+        };
+        
+        const result = await tool.execute(parameters, legacyContext);
         
         logger.debug(`ToolOrchestrator tool execution result:`, result);
         
-        return {
-          wasToolCalled: true,
-          result,
-          functionResult
-        };
+        yield { type: 'complete', data: result };
       } else {
         logger.chat('ToolOrchestrator: No action function detected or low confidence, continuing with chat. Confidence:', functionResult.confidence);
-        return {
-          wasToolCalled: false,
-          functionResult
+        yield { 
+          type: 'complete', 
+          data: { 
+            wasToolCalled: false, 
+            functionResult 
+          } 
         };
       }
       
     } catch (error) {
       logger.error('ToolOrchestrator intent detection or tool execution failed:', error);
-      return {
-        wasToolCalled: false
+      yield { 
+        type: 'error', 
+        error: error instanceof Error ? error.message : 'Unknown error' 
       };
     }
   }
 
-  /**
-   * Handle elicitation responses (future MCP feature)
-   * @param elicitationId - ID of the elicitation request
-   * @param response - User's response to the elicitation
-   * @param context - Tool execution context
-   * @returns Promise<ToolResult>
-   */
-  async handleElicitationResponse(
-    elicitationId: string, 
-    response: any, 
-    context: ToolContext
-  ): Promise<ToolResult> {
-    // Future implementation for MCP elicitation support
-    logger.debug('Elicitation response handling not yet implemented');
-    return {
-      success: false,
-      error: 'Elicitation not yet implemented'
-    };
-  }
+
 
   /**
    * Get list of available tools (useful for MCP introspection)

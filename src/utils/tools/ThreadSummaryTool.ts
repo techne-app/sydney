@@ -5,20 +5,27 @@ import { logger } from '../logger';
 export class ThreadSummaryTool implements Tool {
   name = 'thread_summary';
 
-  async execute(input: ThreadSummaryToolInput, context: ToolContext): Promise<ToolResult> {
+  async execute(input: ThreadSummaryToolInput, context: any): Promise<ToolResult> {
     try {
       logger.chat('ThreadSummaryTool executing for pinned thread');
       
-      const summaryResponse = this.generatePinnedThreadSummary(context.pinnedThread);
+      // Pure tool context (new approach)
+      const pureContext: ToolContext = {
+        conversationId: context.conversationId,
+        messageId: context.messageId,
+        pinnedThread: context.pinnedThread
+      };
       
-      // Update the assistant message with the summary
+      const summaryResponse = this.generatePinnedThreadSummary(pureContext.pinnedThread);
+      
+      // Always update database regardless of UI callbacks
       await ConversationManager.updateMessage(
-        context.conversationId,
-        context.messageId,
+        pureContext.conversationId,
+        pureContext.messageId,
         summaryResponse
       );
       
-      // Update streaming via progress callback if available
+      // Legacy progress callback
       if (context.onProgress) {
         await context.onProgress(summaryResponse);
       }
@@ -35,13 +42,22 @@ export class ThreadSummaryTool implements Tool {
       
       const errorContent = "I encountered an error while generating the thread summary. Please try again.";
       
+      // Pure tool context (new approach)
+      const pureContext: ToolContext = {
+        conversationId: context.conversationId,
+        messageId: context.messageId,
+        pinnedThread: context.pinnedThread
+      };
+      
+      // Legacy progress callback
       if (context.onProgress) {
         await context.onProgress(errorContent);
       }
       
+      // Always update database regardless of UI callbacks
       await ConversationManager.updateMessage(
-        context.conversationId,
-        context.messageId,
+        pureContext.conversationId,
+        pureContext.messageId,
         errorContent
       );
       
