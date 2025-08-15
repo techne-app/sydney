@@ -1,0 +1,48 @@
+{
+  "metadata": {
+    "evaluation_type": "comparison",
+    "single_step_results_file": "mlc_llm/past_evals/single_step_2025-08-14_12-22-31.json",
+    "two_step_results_file": "mlc_llm/past_evals/two_step_2025-08-14_12-22-31.json",
+    "total_models": 3,
+    "evaluation_timestamp": "2025-08-14T17:58:40.788910"
+  },
+  "comparisons": [
+    {
+      "model_name": "Phi-3.5-mini-instruct-q4f16_1-MLC",
+      "single_step_accuracy": 0.535031847133758,
+      "two_step_accuracy": 0.8064102564102564,
+      "accuracy_difference": 0.2713784092764985,
+      "single_step_time": 2.8025176979174278,
+      "two_step_time": 3.3762620953012883,
+      "time_difference": 0.5737443973838605,
+      "recommended_approach": "two"
+    },
+    {
+      "model_name": "gemma-2-2b-it-q4f16_1-MLC",
+      "single_step_accuracy": 0.79171974522293,
+      "two_step_accuracy": 0.7770700636942676,
+      "accuracy_difference": -0.014649681528662417,
+      "single_step_time": 1.602706869544497,
+      "two_step_time": 2.6148259059638734,
+      "time_difference": 1.0121190364193764,
+      "recommended_approach": "similar"
+    },
+    {
+      "model_name": "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+      "single_step_accuracy": 0.8012738853503185,
+      "two_step_accuracy": 0.716025641025641,
+      "accuracy_difference": -0.08524824432467748,
+      "single_step_time": 0.7473277398735095,
+      "two_step_time": 1.7511802334051865,
+      "time_difference": 1.003852493531677,
+      "recommended_approach": "single"
+    }
+  ],
+  "summary": {
+    "two_step_better_count": 1,
+    "single_step_better_count": 1,
+    "similar_performance_count": 1,
+    "average_accuracy_difference": 0.05716016114105286,
+    "average_time_difference": 0.8632386424449713
+  }
+}
