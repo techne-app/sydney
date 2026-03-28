@@ -57,7 +57,7 @@ const config = {
       {
         test: /\.tsx?$/,
         use: 'ts-loader',
-        exclude: /node_modules|vite\.config\.ts/,
+        exclude: /node_modules/,
       },
       {
         test: /\.css$/,
