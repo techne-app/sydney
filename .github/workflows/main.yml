@@ -61,11 +61,12 @@ jobs:
         git tag v${{ steps.version.outputs.version }}
         git push origin v${{ steps.version.outputs.version }}
         
-    - name: Upload & release
-      uses: mnao305/chrome-extension-upload@v5.0.0
-      with:
-        file-path: extension.zip
-        extension-id: ${{ secrets.GOOGLE_WEBSTORE_EXTENSION_ID }}
-        client-id: ${{ secrets.GOOGLE_WEBSTORE_CLIENT_ID }}
-        client-secret: ${{ secrets.GOOGLE_WEBSTORE_CLIENT_SECRET }}
-        refresh-token: ${{ secrets.GOOGLE_WEBSTORE_REFRESH_TOKEN }}
+    # Disabled: this repo is now the Tauri desktop app, not the Chrome extension
+    # - name: Upload & release
+    #   uses: mnao305/chrome-extension-upload@v5.0.0
+    #   with:
+    #     file-path: extension.zip
+    #     extension-id: ${{ secrets.GOOGLE_WEBSTORE_EXTENSION_ID }}
+    #     client-id: ${{ secrets.GOOGLE_WEBSTORE_CLIENT_ID }}
+    #     client-secret: ${{ secrets.GOOGLE_WEBSTORE_CLIENT_SECRET }}
+    #     refresh-token: ${{ secrets.GOOGLE_WEBSTORE_REFRESH_TOKEN }}
