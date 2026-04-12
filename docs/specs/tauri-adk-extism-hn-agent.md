@@ -129,9 +129,6 @@ sidecar/
 │   ├── executor.py          # Extism plugin loader + execution
 │   └── plugins/
 │       └── js_runner.wasm   # Pre-compiled JS execution sandbox
-├── session/
-│   ├── store.py             # Session persistence (SQLite)
-│   └── events.py            # Event types for the append-only log
 ├── prompts/
 │   └── system.py            # System prompt for the HN agent
 └── pyproject.toml
@@ -142,16 +139,20 @@ sidecar/
 ```python
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from google.adk.sessions import DatabaseSessionService
 from agent import create_agent
-from session.store import SessionStore
 
 app = FastAPI()
-sessions = SessionStore("sessions.db")
+sessions = DatabaseSessionService(db_url="sqlite:///sessions.db")
 agent = create_agent()
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    session = sessions.get_or_create(request.session_id)
+    session = await sessions.get_session(
+        app_name="techne", user_id=request.user_id, session_id=request.session_id
+    ) or await sessions.create_session(
+        app_name="techne", user_id=request.user_id
+    )
 
     # Run the agent — ADK handles the tool-calling loop
     response = agent(
@@ -166,7 +167,11 @@ async def chat(request: ChatRequest):
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    session = sessions.get_or_create(request.session_id)
+    session = await sessions.get_session(
+        app_name="techne", user_id=request.user_id, session_id=request.session_id
+    ) or await sessions.create_session(
+        app_name="techne", user_id=request.user_id
+    )
 
     async def generate():
         async for event in agent.stream(request.message):
@@ -521,56 +526,17 @@ export async function sendMessage(
 
 ### 7. Session Management
 
-**Role**: Durable event log so conversations survive sidecar restarts.
+**Role**: Durable sessions so conversations survive sidecar restarts.
 
-Following the Anthropic managed agents pattern: an append-only event log stored outside the LLM context window.
+ADK provides built-in session management via `DatabaseSessionService`, which handles the append-only event log (user messages, tool calls, tool results, assistant messages) automatically. No custom session code needed.
 
 ```python
-# sidecar/session/store.py
-import sqlite3
-import json
-from datetime import datetime
+from google.adk.sessions import DatabaseSessionService
 
-class SessionStore:
-    def __init__(self, db_path: str):
-        self.conn = sqlite3.connect(db_path)
-        self._init_tables()
-
-    def _init_tables(self):
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                created_at TEXT,
-                updated_at TEXT
-            )
-        """)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                event_type TEXT,
-                data TEXT,
-                created_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            )
-        """)
-
-    def append_event(self, session_id: str, event_type: str, data: dict):
-        self.conn.execute(
-            "INSERT INTO events (session_id, event_type, data, created_at) VALUES (?, ?, ?, ?)",
-            (session_id, event_type, json.dumps(data), datetime.utcnow().isoformat())
-        )
-        self.conn.commit()
-
-    def get_events(self, session_id: str, limit: int = 100) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT event_type, data, created_at FROM events WHERE session_id = ? ORDER BY id DESC LIMIT ?",
-            (session_id, limit)
-        ).fetchall()
-        return [{"type": r[0], "data": json.loads(r[1]), "at": r[2]} for r in reversed(rows)]
+sessions = DatabaseSessionService(db_url="sqlite:///sessions.db")
 ```
 
-Event types: `user_message`, `tool_call`, `tool_result`, `assistant_message`, `error`.
+This gives us SQLite-backed persistence with ADK's `Event` model tracking all conversation state.
 
 ## Dependencies
 
@@ -621,7 +587,7 @@ Get the agent loop working end-to-end.
 ### Phase 2: More tools + sessions
 
 6. **Add remaining tools** — `get_trending`, `get_user_threads`
-7. **Session persistence** — SQLite event log, conversation resume on restart
+7. **Session persistence** — configure ADK's `DatabaseSessionService` for conversation resume on restart
 8. **Streaming** — SSE streaming from sidecar to frontend for real-time responses
 
 **Milestone**: Persistent conversations, richer queries, streaming UX.
