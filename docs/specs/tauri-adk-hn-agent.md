@@ -246,7 +246,7 @@ If you're not sure, search more before answering.
 
 Each tool is a decorated Python function. ADK handles the schema generation and the tool-calling loop.
 
-All tools use a shared `httpx.Client` with a 15-second timeout (Azure Functions cold starts can take 5-10s). Every tool checks the response status and returns structured errors the agent can reason about.
+All tools are async and use a shared `httpx.AsyncClient` with a 15-second timeout (Azure Functions cold starts can take 5-10s). This avoids blocking the event loop during backend calls. Every tool checks the response status and returns structured errors the agent can reason about.
 
 #### Common pattern
 
@@ -254,11 +254,11 @@ All tools use a shared `httpx.Client` with a 15-second timeout (Azure Functions 
 import httpx
 
 BACKEND_URL = "https://techne-pipeline-func-prod.azurewebsites.net"
-client = httpx.Client(timeout=15.0)
+client = httpx.AsyncClient(timeout=15.0)
 
-def _call_backend(endpoint: str, payload: dict) -> dict:
+async def _call_backend(endpoint: str, payload: dict) -> dict:
     """POST to backend, return JSON or structured error."""
-    response = client.post(f"{BACKEND_URL}{endpoint}", json=payload)
+    response = await client.post(f"{BACKEND_URL}{endpoint}", json=payload)
     if response.status_code != 200:
         return {"error": f"Backend returned {response.status_code}", "endpoint": endpoint}
     return response.json()
@@ -270,7 +270,7 @@ def _call_backend(endpoint: str, payload: dict) -> dict:
 from google.adk.tools import tool
 
 @tool
-def search_threads(
+async def search_threads(
     query: str,
     tags: list[str] | None = None,
     date_from: str | None = None,
@@ -293,7 +293,7 @@ def search_threads(
     Returns:
         Dict with 'threads' list and 'total_count'.
     """
-    return _call_backend("/api/agent/search", {
+    return await _call_backend("/api/agent/search", {
         "query": query,
         "tags": tags,
         "date_from": date_from,
@@ -308,7 +308,7 @@ def search_threads(
 
 ```python
 @tool
-def get_thread(
+async def get_thread(
     thread_id: str,
     max_comments: int = 50,
     sort_comments_by: str = "top"
@@ -323,7 +323,7 @@ def get_thread(
     Returns:
         Dict with story metadata, tags, and comment list.
     """
-    return _call_backend("/api/agent/thread", {
+    return await _call_backend("/api/agent/thread", {
         "thread_id": thread_id,
         "max_comments": max_comments,
         "sort_comments_by": sort_comments_by,
@@ -334,7 +334,7 @@ def get_thread(
 
 ```python
 @tool
-def get_trending(
+async def get_trending(
     time_window: str = "24h",
     category: str | None = None,
     tag: str | None = None,
@@ -351,7 +351,7 @@ def get_trending(
     Returns:
         Dict with 'threads' list sorted by activity/karma density.
     """
-    return _call_backend("/api/agent/trending", {
+    return await _call_backend("/api/agent/trending", {
         "time_window": time_window,
         "category": category,
         "tag": tag,
@@ -363,21 +363,27 @@ def get_trending(
 
 ```python
 @tool
-def get_user_threads(
+async def get_user_threads(
     username: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
     limit: int = 20
 ) -> dict:
     """Get threads and comments by a specific Hacker News user.
 
     Args:
         username: The HN username.
+        date_from: Start date in YYYY-MM-DD format.
+        date_to: End date in YYYY-MM-DD format.
         limit: Max results (default 20).
 
     Returns:
-        Dict with user's threads and comment activity.
+        Dict with user's threads, comment activity, and top categories/themes.
     """
-    return _call_backend("/api/agent/user", {
+    return await _call_backend("/api/agent/user", {
         "username": username,
+        "date_from": date_from,
+        "date_to": date_to,
         "limit": limit,
     })
 ```
