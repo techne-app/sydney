@@ -1,8 +1,8 @@
-# Techne HN Agent: Tauri + ADK + Extism + llama-server
+# Techne HN Agent: Tauri + ADK + llama-server
 
 ## Vision
 
-A desktop agent that lets you chat with all of Hacker News. Ask questions, discover trends, analyze discussions, and run data analysis — all locally, no cloud LLM required.
+A desktop agent that lets you chat with all of Hacker News. Ask questions, discover trends, and analyze discussions — all locally, no cloud LLM required.
 
 ## Architecture
 
@@ -22,26 +22,24 @@ A desktop agent that lets you chat with all of Hacker News. Ask questions, disco
 │  - GGUF model   │◄───│  - ADK Agent              │
 │  - --jinja      │    │  - LiteLLM → llama-server │
 │  - Tool calling │    │  - Tool registry          │
-│  - OpenAI API   │    │  - Extism sandbox host    │
-└─────────────────┘    │  - Session management     │
-                       └──────────┬───────────────┘
+│  - OpenAI API   │    │  - Session management     │
+└─────────────────┘    └──────────┬───────────────┘
                                   │
-                       ┌──────────┼──────────┐
-                       ▼          ▼          ▼
-                   ┌───────┐ ┌────────┐ ┌────────┐
-                   │Search │ │Thread  │ │Extism  │
-                   │Tool   │ │Tool    │ │Sandbox │
-                   │       │ │        │ │(.wasm) │
-                   └───┬───┘ └───┬────┘ └────────┘
-                       │         │
-                       ▼         ▼
-               ┌─────────────────────┐
-               │  Techne Backend     │
-               │  (Azure Functions)  │
-               │  - All HN threads   │
-               │  - All thread tags  │
-               │  - Search API       │
-               └─────────────────────┘
+                          ┌───────┴───────┐
+                          ▼               ▼
+                      ┌───────┐     ┌────────┐
+                      │Search │     │Thread  │
+                      │Tool   │     │Tool    │
+                      └───┬───┘     └───┬────┘
+                          │             │
+                          ▼             ▼
+                  ┌─────────────────────────┐
+                  │  Techne Backend         │
+                  │  (Azure Functions)      │
+                  │  - All HN threads       │
+                  │  - All thread tags      │
+                  │  - Search API           │
+                  └─────────────────────────┘
 ```
 
 ## Components
@@ -123,12 +121,7 @@ sidecar/
 │   ├── search.py            # search_threads — keyword/tag/date search
 │   ├── thread.py            # get_thread — full thread with comments
 │   ├── trending.py          # get_trending — trending threads/tags
-│   ├── user.py              # get_user_threads — threads by HN user
-│   └── sandbox.py           # run_analysis — Extism WASM sandbox
-├── sandbox/
-│   ├── executor.py          # Extism plugin loader + execution
-│   └── plugins/
-│       └── js_runner.wasm   # Pre-compiled JS execution sandbox
+│   └── user.py              # get_user_threads — threads by HN user
 ├── prompts/
 │   └── system.py            # System prompt for the HN agent
 └── pyproject.toml
@@ -189,7 +182,7 @@ def health():
 ```python
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
-from tools import search_threads, get_thread, get_trending, get_user_threads, run_analysis
+from tools import search_threads, get_thread, get_trending, get_user_threads
 from prompts.system import SYSTEM_PROMPT
 
 def create_agent() -> Agent:
@@ -208,7 +201,6 @@ def create_agent() -> Agent:
             get_thread,
             get_trending,
             get_user_threads,
-            run_analysis,
         ]
     )
 ```
@@ -227,9 +219,7 @@ When a user asks a question:
 1. Think about which tools will help you answer it.
 2. Search for relevant threads. Use multiple searches if needed.
 3. Fetch full thread details when you need to read the actual discussion.
-4. Use run_analysis for data processing (aggregation, trend computation,
-   statistics) when you have structured data to crunch.
-5. Synthesize your findings into a clear, direct answer.
+4. Synthesize your findings into a clear, direct answer.
 
 Always cite specific HN threads when referencing discussions.
 Prefer concrete data over vague summaries.
@@ -350,110 +340,7 @@ def get_user_threads(
     return response.json()
 ```
 
-#### sandbox.py
-
-```python
-@tool
-def run_analysis(code: str, data: str) -> str:
-    """Execute JavaScript code in a secure sandbox to analyze data.
-
-    Use this when you need to process, aggregate, or compute statistics
-    on structured data (JSON). The code runs in an isolated WebAssembly
-    sandbox with no filesystem or network access.
-
-    Args:
-        code: JavaScript code to execute. Must read input via
-              Host.inputString() and write output via Host.outputString().
-        data: JSON string of data to pass to the code.
-
-    Returns:
-        The output string from the sandbox execution.
-    """
-    from sandbox.executor import SandboxExecutor
-    executor = SandboxExecutor()
-    return executor.run(code, data)
-```
-
-### 5. Extism Sandbox
-
-**Role**: Secure execution environment for agent-generated code. The agent writes JavaScript to analyze HN data; the sandbox runs it in isolation.
-
-```
-sidecar/sandbox/
-├── executor.py              # Python host that loads + runs the WASM plugin
-└── plugins/
-    └── js_runner.wasm       # Pre-built WASM module that evaluates JS
-```
-
-#### executor.py
-
-```python
-import extism
-
-PLUGIN_PATH = os.path.join(os.path.dirname(__file__), "plugins", "js_runner.wasm")
-
-class SandboxExecutor:
-    def __init__(self, memory_limit_mb: int = 64, timeout_ms: int = 5000):
-        self.memory_limit = memory_limit_mb
-        self.timeout_ms = timeout_ms
-
-    def run(self, code: str, data: str) -> str:
-        """Run JS code in the WASM sandbox with the given data."""
-        manifest = {
-            "wasm": [{"path": PLUGIN_PATH}],
-            "memory": {"max_pages": self.memory_limit * 16},  # 64KB per page
-            "timeout_ms": self.timeout_ms,
-            "allowed_hosts": [],  # No network access
-        }
-
-        plugin = extism.Plugin(manifest, wasi=True)
-
-        try:
-            # Pass the data + code as JSON input
-            input_payload = json.dumps({"code": code, "data": data})
-            result = plugin.call("execute", input_payload.encode())
-            return result.decode()
-        except Exception as e:
-            return json.dumps({"error": str(e)})
-        finally:
-            plugin.close()
-```
-
-#### js_runner.wasm
-
-This is a pre-compiled Extism plugin (built from JS/TS using the Extism PDK). The source:
-
-```javascript
-// js_runner_plugin.js — compiled to .wasm via Extism JS PDK
-
-function execute() {
-  const input = JSON.parse(Host.inputString());
-  const { code, data } = input;
-
-  // Make data available to the user's code
-  const parsedData = JSON.parse(data);
-
-  // Create a function from the agent's code and run it
-  const fn = new Function("data", code);
-  const result = fn(parsedData);
-
-  Host.outputString(JSON.stringify(result));
-}
-
-module.exports = { execute };
-```
-
-**Build**: `extism-js js_runner_plugin.js -o js_runner.wasm`
-
-**Security constraints**:
-- No `fetch`, no `XMLHttpRequest` — no network
-- No `fs`, no file access
-- No `process`, no `require` — no Node APIs
-- Memory capped (default 64MB)
-- Execution timeout (default 5s)
-- The only I/O is `Host.inputString()` → `Host.outputString()`
-
-### 6. Frontend
+### 5. Frontend
 
 **Role**: Thin chat UI. All intelligence is in the sidecar.
 
@@ -524,7 +411,7 @@ export async function sendMessage(
 }
 ```
 
-### 7. Session Management
+### 6. Session Management
 
 **Role**: Durable sessions so conversations survive sidecar restarts.
 
@@ -551,7 +438,7 @@ dependencies = [
     "uvicorn>=0.34",
     "google-adk>=1.0",
     "litellm>=1.50",
-    "extism>=1.7",
+
     "httpx>=0.28",
     "pydantic>=2.10",
 ]
@@ -568,11 +455,10 @@ tauri-plugin-shell = "2"  # For sidecar process management
 
 - `llama-server` — from llama.cpp releases (per-platform)
 - GGUF model file — `Hermes-2-Pro-Llama-3-8B-Q4_K_M.gguf` (~4.5GB)
-- `js_runner.wasm` — pre-compiled Extism plugin (~2MB)
 
 ## Implementation Order
 
-### Phase 1: Agent core (no sandbox)
+### Phase 1: Agent core
 
 Get the agent loop working end-to-end.
 
@@ -592,21 +478,12 @@ Get the agent loop working end-to-end.
 
 **Milestone**: Persistent conversations, richer queries, streaming UX.
 
-### Phase 3: Sandbox
+### Phase 3: Polish
 
-9. **Build js_runner.wasm** — compile the Extism JS plugin
-10. **Implement SandboxExecutor** — Extism host in Python
-11. **Add run_analysis tool** — wire sandbox into the agent's tool set
-12. **Test with data analysis queries** — "What are the most discussed topics this month?", "Show me sentiment trends for Rust"
-
-**Milestone**: Agent can write and execute code to analyze HN data.
-
-### Phase 4: Polish
-
-13. **Error handling** — graceful recovery from llama-server crashes, sidecar timeouts
-14. **Model hot-swap** — settings UI to pick a different GGUF without restarting the app
-15. **Remove dead code** — delete all WebLLM, intent detection, and in-browser tool orchestration code
-16. **Packaging** — bundle llama-server binary and GGUF model with the Tauri app
+9. **Error handling** — graceful recovery from llama-server crashes, sidecar timeouts
+10. **Model hot-swap** — settings UI to pick a different GGUF without restarting the app
+11. **Remove dead code** — delete all WebLLM, intent detection, and in-browser tool orchestration code
+12. **Packaging** — bundle llama-server binary and GGUF model with the Tauri app
 
 ## What gets deleted
 
@@ -763,7 +640,7 @@ Get full thread details including the comment tree. This is the "read the actual
 
 **Design decisions:**
 - Comments are a nested tree (not flat) so the agent understands reply structure.
-- `depth` is denormalized for easy flattening if the agent passes comments to `run_analysis`.
+- `depth` is denormalized for easy flattening if needed.
 - `max_comments` prevents blowing the context window. 50 top comments is usually enough to understand the discussion. The agent can ask for more if needed.
 - Comment `score` lets the agent focus on high-signal comments.
 
@@ -865,7 +742,7 @@ Look up a specific HN user's thread participation. For queries like "what has tp
 
 **Design decisions:**
 - `user_comment_count` and `user_karma_in_thread` — how active THIS user was in each thread, not the thread totals.
-- `top_categories` / `top_themes` — pre-aggregated so the agent can characterize a user's interests without running `run_analysis`. Saves a tool call.
+- `top_categories` / `top_themes` — pre-aggregated so the agent can characterize a user's interests without fetching all their threads. Saves tool calls.
 - `thread_count` — total threads found (vs. the `limit` returned), so the agent knows coverage.
 
 ---
@@ -907,6 +784,5 @@ All under `/api/agent/` prefix to separate from existing endpoints.
 
 1. **Model size vs. quality** — Hermes 2 Pro 8B (Q4_K_M, ~4.5GB) is the safe choice. Could go smaller (Hermes 3B) for faster inference or larger (Functionary 70B) for better reasoning. What hardware should we target?
 2. **Streaming from ADK** — Does ADK support streaming tool-call events through LiteLLM to llama-server? Need to verify this path works.
-3. **Extism JS PDK maturity** — The JS PDK compiles to QuickJS inside WASM. Verify it handles the JSON processing patterns we need.
-4. **App size** — The GGUF model is ~4.5GB. Should it be bundled or downloaded on first launch?
-5. **Backend search strategy** — Does the backend already have full-text or vector search over threads? If keyword-only, is that sufficient for v1 given the agent can interpret results?
+3. **App size** — The GGUF model is ~4.5GB. Should it be bundled or downloaded on first launch?
+4. **Backend search strategy** — Does the backend already have full-text or vector search over threads? If keyword-only, is that sufficient for v1 given the agent can interpret results?
