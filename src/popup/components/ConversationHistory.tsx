@@ -39,7 +39,10 @@ export const ConversationHistory: React.FC<ConversationHistoryProps> = ({
       const deletePromises = conversations.map(conv => ConversationManager.deleteConversation(conv.id));
       await Promise.all(deletePromises);
       setConversations([]);
-      
+      // Fix: notify parent for each deleted conversation so ChatPage state updates too
+      if (onDeleteConversation) {
+        conversations.forEach(conv => onDeleteConversation(conv.id));
+      }
       // Note: The parent component will handle what happens when active conversation is deleted
     } catch (err) {
       logger.error('Failed to clear conversations:', err);
@@ -100,7 +103,11 @@ export const ConversationHistory: React.FC<ConversationHistoryProps> = ({
                 timestamp={new Date(conversation.createdAt).toLocaleString()}
                 isActive={activeConversationId === conversation.id}
                 onPrimaryAction={onSelectConversation ? () => onSelectConversation(conversation.id) : undefined}
-                onDelete={onDeleteConversation ? () => onDeleteConversation(conversation.id) : undefined}
+                onDelete={onDeleteConversation ? () => {
+                  onDeleteConversation(conversation.id);
+                  // Fix: update local list immediately so UI reflects deletion without reload
+                  setConversations(prev => prev.filter(c => c.id !== conversation.id));
+                } : undefined}
                 primaryActionLabel="Open"
               />
             );

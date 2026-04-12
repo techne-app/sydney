@@ -17,7 +17,14 @@ app.add_middleware(
 )
 
 # Load model once at startup
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "Qwen3-4B-Q4_K_M.gguf")
+import sys
+BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+MODEL_NAME = "Qwen3-4B-Q4_K_M.gguf"
+# Production: bundled inside .app at Contents/Resources/models/
+RESOURCES_MODEL = os.path.join(BASE_DIR, "..", "Resources", "models", MODEL_NAME)
+# Dev: uv run main.py from sidecar/, model is at sidecar/models/
+LOCAL_MODEL = os.path.join(BASE_DIR, "models", MODEL_NAME)
+MODEL_PATH = RESOURCES_MODEL if os.path.exists(RESOURCES_MODEL) else LOCAL_MODEL
 
 print(f"Loading model from {MODEL_PATH}...")
 llm = Llama(

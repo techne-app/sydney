@@ -94,11 +94,12 @@
 #root, .App, .popup-container, .main-container {
   background: var(--bg-gradient-main);
   color: var(--foreground);
-  min-height: 100vh;
+  height: 100%;
 }
 
 /* Ensure body and main containers use the gradient background and custom font */
 body, html {
+  height: 100%;
   background: var(--bg-gradient-main);
   color: var(--foreground);
   font-family: var(--font-inter) !important;

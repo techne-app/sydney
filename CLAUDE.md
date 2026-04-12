@@ -49,6 +49,57 @@ The version script automatically updates both `package.json` and `public/manifes
 4. Click "Load unpacked" and select the `dist/` folder
 5. Navigate to Hacker News to see the extension in action
 
+## Tauri Desktop App
+
+This repo also contains a Tauri v2 desktop app (separate from the Chrome extension). It wraps the same React frontend and runs a Python sidecar for local AI inference.
+
+### Architecture
+- **Frontend**: Same React/Vite app, built to `dist-tauri/` (via `npm run vite:build`)
+- **Rust shell**: `src-tauri/` — Tauri v2 app shell
+- **Python sidecar**: `sidecar/` — runs via `uv` in dev, compiled with Nuitka for production
+- **AI model**: `sidecar/models/Qwen3-4B-Q4_K_M.gguf` (2.4GB) — single copy, used by both dev and build
+
+### Sidecar Behavior: Dev vs Production
+The sidecar auto-start in `src-tauri/src/lib.rs` is gated by `cfg!(debug_assertions)`:
+- **Dev mode** (`tauri:dev`): sidecar does NOT auto-start. Run `uv run main.py` manually in a separate terminal first. No Nuitka compilation needed — fast iteration on Python code.
+- **Production** (`tauri:build`): sidecar auto-starts from the compiled Nuitka binary bundled in the `.app`.
+
+### Model Path Resolution (`sidecar/main.py`)
+The model is stored once at `sidecar/models/`. The sidecar finds it via two paths:
+- **Production**: `Contents/Resources/models/` — Tauri bundles it there from `sidecar/models/` via the `resources` config in `tauri.conf.json`
+- **Dev**: `sidecar/models/` — `uv run main.py` runs from `sidecar/`, finds it directly
+
+### Build Commands
+```bash
+npm run tauri:dev     # Dev mode — run `uv run main.py` in separate terminal first
+npm run tauri:build   # Production build → .app + .dmg (requires compiled sidecar binary)
+```
+
+### Distributing to Users
+The `.dmg` is the file to send. Users open it, drag the app into Applications, done.
+
+Current build is `aarch64` (Apple Silicon only). For a universal binary (Apple Silicon + Intel):
+```bash
+cargo tauri build --target universal-apple-darwin
+```
+
+### macOS Build Requirement: Automation Permission
+`npm run tauri:build` will silently fail during DMG creation unless the terminal has permission to control Finder.
+
+**Symptom**: Build succeeds for `.app` but fails with `error running bundle_dmg.sh` and leaves orphaned `rw.*.dmg` files in `src-tauri/target/release/bundle/macos/`.
+
+**Root cause**: Tauri's DMG bundler runs an AppleScript to position icons in the installer window. macOS blocks this with error `-1743` if Automation permission is missing.
+
+**Fix**: System Settings → Privacy & Security → Automation → find your terminal → enable the Finder checkbox.
+
+**If orphaned files accumulate**:
+```bash
+rm -f src-tauri/target/release/bundle/macos/rw.*.dmg
+```
+
+### Python Sidecar (UV)
+The sidecar uses `uv` for dependency management. See `sidecar/pyproject.toml` for dependencies. The compiled Nuitka binary must exist at `src-tauri/binaries/sidecar-aarch64-apple-darwin` before running `tauri:build`.
+
 ## Testing Infrastructure
 
 ### Testing Framework: Jest
