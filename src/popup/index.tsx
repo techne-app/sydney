@@ -7,7 +7,7 @@ logger.info("Popup script starting...");
 
 const App: React.FC = () => {
   return (
-    <div className="h-screen w-full text-base">
+    <div className="fixed inset-0 text-base overflow-hidden">
       <ChatPage />
     </div>
   );

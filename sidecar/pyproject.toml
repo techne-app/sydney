@@ -7,4 +7,5 @@ dependencies = [
     "uvicorn",
     "pydantic",
     "llama-cpp-python",
+    "nuitka>=4.0.7",
 ]
