@@ -15,24 +15,25 @@ A desktop agent that lets you chat with all of Hacker News. Ask questions, disco
 └────────┬──────────────────────────┬─────────────┘
          │                          │
          ▼                          ▼
-┌─────────────────┐    ┌──────────────────────────┐
-│  llama-server   │    │  Python Sidecar (FastAPI) │
-│  (Port 8080)    │    │  (Port 8000)              │
-│                 │    │                            │
-│  - GGUF model   │◄───│  - ADK Agent              │
-│  - --jinja      │    │  - LiteLLM → llama-server │
-│  - Tool calling │    │  - Tool registry          │
-│  - OpenAI API   │    │  - Session management     │
-└─────────────────┘    └──────────┬───────────────┘
+┌──────────────────┐    ┌───────────────────────────┐
+│  llama-server    │    │  Python Sidecar (FastAPI)  │
+│  (Port 41820)    │    │  (Port 41821)              │
+│                  │    │                             │
+│  - GGUF model    │◄───│  - ADK Agent               │
+│  - --jinja       │    │  - LiteLLM → llama-server  │
+│  - Tool calling  │    │  - Tool registry           │
+│  - OpenAI API    │    │  - Session management      │
+└──────────────────┘    └──────────┬────────────────┘
                                   │
-                          ┌───────┴───────┐
-                          ▼               ▼
-                      ┌───────┐     ┌────────┐
-                      │Search │     │Thread  │
-                      │Tool   │     │Tool    │
-                      └───┬───┘     └───┬────┘
-                          │             │
-                          ▼             ▼
+                    ┌─────────┬───┴───┬─────────┐
+                    ▼         ▼       ▼         ▼
+                ┌───────┐ ┌──────┐ ┌───────┐ ┌──────┐
+                │Search │ │Thread│ │Trend- │ │User  │
+                │Tool   │ │Tool  │ │ing    │ │Tool  │
+                └───┬───┘ └──┬───┘ └───┬───┘ └──┬───┘
+                    │        │         │        │
+                    └────────┴────┬────┴────────┘
+                                 ▼
                   ┌─────────────────────────┐
                   │  Techne Backend         │
                   │  (Azure Functions)      │
@@ -73,10 +74,10 @@ src-tauri/
 **Startup sequence**:
 ```
 App launches
-  → Spawn llama-server (port 8080, --jinja flag for tool calling)
-  → Poll GET http://localhost:8080/health until ready
-  → Spawn Python sidecar (port 8000)
-  → Poll GET http://localhost:8000/health until ready
+  → Spawn llama-server (port 41820, --jinja flag for tool calling)
+  → Poll GET http://localhost:41820/health until ready
+  → Spawn Python sidecar (port 41821)
+  → Poll GET http://localhost:41821/health until ready
   → Frontend loads, connects to sidecar
 ```
 
@@ -93,10 +94,10 @@ App launches
 llama-server \
   -m models/Hermes-2-Pro-Llama-3-8B-Q4_K_M.gguf \
   --host 127.0.0.1 \
-  --port 8080 \
+  --port 41820 \
   --jinja \
   -ngl -1 \
-  -c 8192
+  -c 16384
 ```
 
 **Model choice**: Start with Hermes 2 Pro 8B (Q4_K_M) for battle-tested tool calling. Can swap to Functionary v3.2 or Gemma 4 later — just change the GGUF file and restart.
@@ -104,7 +105,7 @@ llama-server \
 **Flags**:
 - `--jinja`: Required. Enables the model's chat template for proper tool calling.
 - `-ngl -1`: Offload all layers to Metal GPU.
-- `-c 8192`: Context window. 8K is enough for multi-step agent reasoning with tool results.
+- `-c 16384`: Context window. 16K gives room for system prompt (~500 tokens) + tool definitions (~500) + search results (~3K) + thread comments (~5K) + conversation history + model reasoning. The memory overhead is ~2GB above the base model on Apple Silicon.
 
 ### 3. Python Sidecar (FastAPI + ADK)
 
@@ -114,61 +115,69 @@ llama-server \
 
 ```
 sidecar/
-├── main.py                  # FastAPI app, /chat and /health endpoints
-├── agent.py                 # ADK Agent setup (model, tools, instruction)
+├── main.py                  # FastAPI app, /chat, /chat/stream, /health
+├── agent.py                 # create_agent() — assembles agent from tools
+├── agents/                  # Sub-agent definitions (empty in v1, seam for growth)
+│   └── __init__.py
 ├── tools/
-│   ├── __init__.py          # Tool registry
+│   ├── __init__.py          # Exports all tool functions
 │   ├── search.py            # search_threads — keyword/tag/date search
 │   ├── thread.py            # get_thread — full thread with comments
 │   ├── trending.py          # get_trending — trending threads/tags
 │   └── user.py              # get_user_threads — threads by HN user
+├── state.py                 # State key constants + namespace helpers
 ├── prompts/
 │   └── system.py            # System prompt for the HN agent
 └── pyproject.toml
 ```
 
-#### main.py — API Surface
+#### main.py — API Surface (pseudocode)
+
+The actual ADK API uses a `Runner` that takes a session service, not direct agent calls. This pseudocode shows the intent — exact API calls will differ during implementation.
 
 ```python
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from google.adk.sessions import DatabaseSessionService
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService  # DatabaseSessionService in Phase 2
+from google.genai import types
 from agent import create_agent
 
 app = FastAPI()
-sessions = DatabaseSessionService(db_url="sqlite:///sessions.db")
+session_service = InMemorySessionService()  # swap to DatabaseSessionService later
 agent = create_agent()
+runner = Runner(agent=agent, app_name="techne", session_service=session_service)
 
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    session = await sessions.get_session(
-        app_name="techne", user_id=request.user_id, session_id=request.session_id
-    ) or await sessions.create_session(
-        app_name="techne", user_id=request.user_id
-    )
-
-    # Run the agent — ADK handles the tool-calling loop
-    response = agent(
-        request.message,
-        session_id=session.id
-    )
-
-    return ChatResponse(
-        reply=str(response),
-        session_id=session.id
-    )
+USER_ID = "local"  # single-user desktop app
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    session = await sessions.get_session(
-        app_name="techne", user_id=request.user_id, session_id=request.session_id
-    ) or await sessions.create_session(
-        app_name="techne", user_id=request.user_id
+    session = await session_service.get_session(
+        app_name="techne", user_id=USER_ID, session_id=request.session_id
+    ) or await session_service.create_session(
+        app_name="techne", user_id=USER_ID
+    )
+
+    content = types.Content(
+        role="user", parts=[types.Part(text=request.message)]
     )
 
     async def generate():
-        async for event in agent.stream(request.message):
-            yield f"data: {event.to_json()}\n\n"
+        async for event in runner.run_async(
+            user_id=USER_ID, session_id=session.id, new_message=content
+        ):
+            # Emit tool-call events so frontend can show "Searching...", "Reading thread..."
+            if event.actions and event.actions.tool_calls:
+                for tc in event.actions.tool_calls:
+                    yield sse_event("tool_call", {
+                        "tool": tc.function.name,
+                        "args": tc.function.arguments
+                    })
+            # Emit text chunks for streaming response
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        yield sse_event("text", {"content": part.text})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -176,6 +185,12 @@ async def chat_stream(request: ChatRequest):
 def health():
     return {"status": "ok"}
 ```
+
+**SSE event types** the frontend should handle:
+- `tool_call` — agent is invoking a tool (display status: "Searching...", "Reading thread...")
+- `tool_result` — tool returned data (optionally render thread cards)
+- `text` — agent is generating response text (stream to UI)
+- `agent_transfer` — (v1.5+) control moved to a sub-agent
 
 #### agent.py — ADK Agent Setup
 
@@ -188,7 +203,7 @@ from prompts.system import SYSTEM_PROMPT
 def create_agent() -> Agent:
     model = LiteLlm(
         model="openai/hermes-2-pro",
-        api_base="http://localhost:8080/v1",
+        api_base="http://localhost:41820/v1",
         api_key="not-needed"
     )
 
@@ -231,6 +246,24 @@ If you're not sure, search more before answering.
 
 Each tool is a decorated Python function. ADK handles the schema generation and the tool-calling loop.
 
+All tools use a shared `httpx.Client` with a 15-second timeout (Azure Functions cold starts can take 5-10s). Every tool checks the response status and returns structured errors the agent can reason about.
+
+#### Common pattern
+
+```python
+import httpx
+
+BACKEND_URL = "https://techne-pipeline-func-prod.azurewebsites.net"
+client = httpx.Client(timeout=15.0)
+
+def _call_backend(endpoint: str, payload: dict) -> dict:
+    """POST to backend, return JSON or structured error."""
+    response = client.post(f"{BACKEND_URL}{endpoint}", json=payload)
+    if response.status_code != 200:
+        return {"error": f"Backend returned {response.status_code}", "endpoint": endpoint}
+    return response.json()
+```
+
 #### search.py
 
 ```python
@@ -258,36 +291,34 @@ def search_threads(
     Returns:
         Dict with 'threads' list and 'total_count'.
     """
-    # Call Techne backend API
-    response = httpx.get(
-        f"{BACKEND_URL}/api/search",
-        params={
-            "q": query,
-            "tags": ",".join(tags) if tags else None,
-            "from": date_from,
-            "to": date_to,
-            "sort": sort_by,
-            "limit": min(limit, 50),
-        }
-    )
-    return response.json()
+    return _call_backend("/api/agent/search", {
+        "query": query,
+        "tags": tags,
+        "date_from": date_from,
+        "date_to": date_to,
+        "sort_by": sort_by,
+        "limit": min(limit, 50),
+    })
 ```
 
 #### thread.py
 
 ```python
 @tool
-def get_thread(thread_id: str) -> dict:
+def get_thread(thread_id: str, max_comments: int = 50) -> dict:
     """Get the full details of a Hacker News thread including all comments.
 
     Args:
         thread_id: The HN story/thread ID.
+        max_comments: Max comments to return (default 50).
 
     Returns:
         Dict with story metadata, tags, and comments tree.
     """
-    response = httpx.get(f"{BACKEND_URL}/api/thread/{thread_id}")
-    return response.json()
+    return _call_backend("/api/agent/thread", {
+        "thread_id": thread_id,
+        "max_comments": max_comments,
+    })
 ```
 
 #### trending.py
@@ -309,11 +340,11 @@ def get_trending(
     Returns:
         Dict with 'threads' list sorted by activity/karma density.
     """
-    response = httpx.get(
-        f"{BACKEND_URL}/api/trending",
-        params={"window": time_window, "tag": tag, "limit": limit}
-    )
-    return response.json()
+    return _call_backend("/api/agent/trending", {
+        "time_window": time_window,
+        "tag": tag,
+        "limit": limit,
+    })
 ```
 
 #### user.py
@@ -333,11 +364,10 @@ def get_user_threads(
     Returns:
         Dict with user's threads and comment activity.
     """
-    response = httpx.get(
-        f"{BACKEND_URL}/api/user/{username}/threads",
-        params={"limit": limit}
-    )
-    return response.json()
+    return _call_backend("/api/agent/user", {
+        "username": username,
+        "limit": limit,
+    })
 ```
 
 ### 5. Frontend
@@ -368,23 +398,34 @@ def get_user_threads(
 ```typescript
 // src/utils/agentClient.ts
 
-const SIDECAR_URL = "http://localhost:8000";
+const SIDECAR_URL = "http://localhost:41821";
 
-export interface AgentMessage {
-  role: "user" | "assistant";
-  content: string;
+export type AgentEventType = "tool_call" | "tool_result" | "text" | "agent_transfer";
+
+export interface AgentEvent {
+  type: AgentEventType;
+  data: Record<string, unknown>;
 }
 
-export async function sendMessage(
-  message: string,
-  sessionId: string,
-  onChunk?: (text: string) => void
-): Promise<string> {
+export interface SendMessageOptions {
+  message: string;
+  sessionId: string;
+  onEvent?: (event: AgentEvent) => void;  // all event types
+  onText?: (text: string) => void;         // convenience: accumulated text
+  signal?: AbortSignal;                     // cancellation
+}
+
+export async function sendMessage(opts: SendMessageOptions): Promise<string> {
   const response = await fetch(`${SIDECAR_URL}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, session_id: sessionId }),
+    body: JSON.stringify({ message: opts.message, session_id: opts.sessionId }),
+    signal: opts.signal,
   });
+
+  if (!response.ok) {
+    throw new Error(`Sidecar returned ${response.status}`);
+  }
 
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -395,13 +436,14 @@ export async function sendMessage(
     if (done) break;
 
     const chunk = decoder.decode(value);
-    // Parse SSE events
     for (const line of chunk.split("\n")) {
       if (line.startsWith("data: ")) {
-        const event = JSON.parse(line.slice(6));
+        const event: AgentEvent = JSON.parse(line.slice(6));
+        opts.onEvent?.(event);
+
         if (event.type === "text") {
-          fullResponse += event.content;
-          onChunk?.(fullResponse);
+          fullResponse += (event.data as { content: string }).content;
+          opts.onText?.(fullResponse);
         }
       }
     }
@@ -411,19 +453,143 @@ export async function sendMessage(
 }
 ```
 
+The frontend uses `onEvent` to show agent activity:
+- `tool_call` with `{tool: "search_threads", args: {...}}` → display "Searching..."
+- `tool_call` with `{tool: "get_thread", args: {...}}` → display "Reading thread..."
+- `text` → stream response text to the chat bubble
+- `agent_transfer` (v1.5+) → show which sub-agent is active
+
 ### 6. Session Management
 
-**Role**: Durable sessions so conversations survive sidecar restarts.
+**Role**: Track conversation state across the agent tree.
 
-ADK provides built-in session management via `DatabaseSessionService`, which handles the append-only event log (user messages, tool calls, tool results, assistant messages) automatically. No custom session code needed.
+ADK provides built-in session management with pluggable backends:
+
+- **Phase 1-2**: `InMemorySessionService` — simplest, no persistence. Conversations lost on sidecar restart. Good enough for initial development.
+- **Phase 2+**: `DatabaseSessionService(db_url="sqlite+aiosqlite:///sessions.db")` — SQLite-backed persistence. Conversations survive restarts.
 
 ```python
-from google.adk.sessions import DatabaseSessionService
+# Phase 1
+from google.adk.sessions import InMemorySessionService
+session_service = InMemorySessionService()
 
-sessions = DatabaseSessionService(db_url="sqlite:///sessions.db")
+# Phase 2+ (swap one line)
+from google.adk.sessions import DatabaseSessionService
+session_service = DatabaseSessionService(db_url="sqlite+aiosqlite:///sessions.db")
 ```
 
-This gives us SQLite-backed persistence with ADK's `Event` model tracking all conversation state.
+**Note**: ADK's `DatabaseSessionService` requires `aiosqlite` as an async SQLite driver. The session schema has had breaking changes (v0→v1 in ADK 1.22) and has no Alembic migration support yet. For a single-user desktop app, deleting the SQLite file on schema changes is acceptable.
+
+## Agent Topology
+
+ADK is chosen specifically for its multi-agent capabilities — composing specialized sub-agents, deterministic workflow pipelines, and structured delegation. The architecture starts flat and grows into a hierarchy as capabilities expand.
+
+### Why start flat
+
+With a local 8B model (Hermes 2 Pro), LLM-based routing between sub-agents is unreliable. The model already has to decide which tool to call — making it also pick which *agent* to transfer to (exposed as additional `transfer_to_agent_X` tool calls) is strictly harder. Four tools is well within what an 8B model handles reliably.
+
+### Why ADK still earns its keep
+
+ADK's **deterministic workflow agents** (`SequentialAgent`, `ParallelAgent`, `LoopAgent`) don't use an LLM at all — they orchestrate sub-agents programmatically. This is the extension seam: we add structured pipelines without requiring a better routing model.
+
+### v1: Flat single agent
+
+```python
+# sidecar/agent.py
+
+root_agent = Agent(
+    name="hn_agent",
+    model=model,
+    instruction=SYSTEM_PROMPT,
+    tools=[search_threads, get_thread, get_trending, get_user_threads],
+    # No sub_agents — all capabilities are direct tools
+)
+```
+
+All 4 tools on one agent. The LLM picks tools, ADK runs the tool-calling loop. Simple, reliable with 8B.
+
+### v1.5: First sub-agent (deterministic pipeline)
+
+**Trigger**: When the single agent demonstrably fails at multi-step research — e.g., user asks "compare sentiment on Rust vs Go in kernel discussions" and the model fetches one thread then answers prematurely.
+
+```python
+# sidecar/agents/deep_research.py
+
+search_step = Agent(
+    name="research_searcher",
+    model=model,
+    description="Searches for relevant HN threads from multiple angles.",
+    instruction="Perform 2-3 targeted searches. Store results in state['research:threads'].",
+    tools=[search_threads, get_trending, get_user_threads],
+)
+
+analyze_step = Agent(
+    name="research_analyzer",
+    model=model,
+    description="Reads threads and synthesizes findings.",
+    instruction="Fetch full details for the most relevant threads. Produce a synthesis.",
+    tools=[get_thread],
+)
+
+deep_research = SequentialAgent(
+    name="deep_research",
+    description="Complex research requiring multiple searches and thread analysis.",
+    sub_agents=[search_step, analyze_step],
+)
+```
+
+```python
+# sidecar/agent.py (updated)
+
+root_agent = Agent(
+    name="hn_agent",
+    model=model,
+    instruction=SYSTEM_PROMPT,
+    tools=[search_threads, get_thread, get_trending, get_user_threads],
+    sub_agents=[deep_research],  # ← add pipeline
+)
+```
+
+**Key insight**: `SequentialAgent` runs search→analyze deterministically. The 8B model never has to decide "should I search more or start analyzing?" — that decision is baked into the pipeline. The root agent only needs to decide "is this a simple query (handle directly) or a research question (delegate to deep_research)?" — a much easier routing decision.
+
+### v2: Specialized sub-agents (requires better model)
+
+When local models improve (or if a cloud model is added), the root agent becomes a thin router:
+
+```
+root_agent (LlmAgent — router)
+├── discovery_agent (LlmAgent)
+│   tools: [search_threads, get_trending, get_user_threads]
+│
+├── analysis_agent (SequentialAgent — deterministic)
+│   ├── fetch_step (LlmAgent) — tools: [get_thread]
+│   └── synthesize_step (LlmAgent) — no tools, just reasoning
+│
+└── monitoring_agent (LlmAgent — new capability)
+    tools: [create_alert, list_alerts, check_alerts]
+```
+
+This requires the router model to reliably distinguish 3 sub-agents from their descriptions. Not feasible with current 8B models, but straightforward with 30B+ or cloud models.
+
+### State namespace convention
+
+ADK sessions use a flat shared state dict. All agents and tools see the same keys. Namespace from day 1 to enable future agent splitting:
+
+```python
+# Tool-domain prefixes
+"search:last_query"         # str — most recent search query
+"search:last_results"       # list — most recent search results
+"search:total_count"        # int — total matches for pagination
+"thread:last_read_id"       # str — last thread fetched in full
+"trending:last_window"      # str — last time window used
+"user:last_lookup"          # str — last username looked up
+
+# Pipeline prefixes (v1.5+)
+"research:question"         # str — the research question being investigated
+"research:threads"          # list — accumulated search results across steps
+```
+
+This costs nothing in v1 (single agent reads/writes all keys) and makes future agent splitting painless — each sub-agent reads only its namespace.
 
 ## Dependencies
 
@@ -436,11 +602,12 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
-    "google-adk>=1.0",
-    "litellm>=1.50",
+    "google-adk~=1.29.0",
+    "litellm>=1.50,!=1.82.0,!=1.82.1,!=1.82.2,!=1.82.3,!=1.82.4,!=1.82.5",  # compromised versions excluded
 
     "httpx>=0.28",
     "pydantic>=2.10",
+    "aiosqlite>=0.20",  # required by DatabaseSessionService
 ]
 ```
 
@@ -470,13 +637,13 @@ Get the agent loop working end-to-end.
 
 **Milestone**: User can chat with HN through the desktop app. Agent searches, fetches threads, and synthesizes answers across multiple tool calls.
 
-### Phase 2: More tools + sessions
+### Phase 2: Streaming + more tools
 
-6. **Add remaining tools** — `get_trending`, `get_user_threads`
-7. **Session persistence** — configure ADK's `DatabaseSessionService` for conversation resume on restart
-8. **Streaming** — SSE streaming from sidecar to frontend for real-time responses
+6. **Streaming** — SSE streaming from sidecar to frontend with tool-call events for real-time status
+7. **Add remaining tools** — `get_trending`, `get_user_threads`
+8. **Session persistence** — swap `InMemorySessionService` for `DatabaseSessionService`, conversation resume on restart
 
-**Milestone**: Persistent conversations, richer queries, streaming UX.
+**Milestone**: Streaming UX with agent activity visibility, richer queries, persistent conversations.
 
 ### Phase 3: Polish
 
@@ -764,7 +931,7 @@ All under `/api/agent/` prefix to separate from existing endpoints.
 
 2. **Consistent thread shape.** Every endpoint that returns threads uses the same core fields (`thread_id`, `story_title`, `anchor`, `theme`, `category`, `comment_count`, `cumulative_karma`, `summary`, `updated_at`). The frontend can render any of them with `ThreadCard.tsx`.
 
-3. **Agent-friendly response sizes.** Defaults are tuned to fit in an 8K context window with room for reasoning. `search` returns 20 threads with summaries (~3K tokens). `get_thread` returns 50 comments (~4K tokens). The agent can request more if it has headroom.
+3. **Agent-friendly response sizes.** Defaults are tuned for a 16K context window with room for reasoning. `search` returns 20 threads with summaries (~3K tokens). `get_thread` returns 50 comments (~4-5K tokens). A search→read flow leaves ~6-7K for system prompt, history, and model reasoning.
 
 4. **Pre-aggregated where possible.** `user` returns `top_categories` / `top_themes` so the agent doesn't need to fetch 50 threads and run analysis just to answer "what does tptacek care about?"
 
