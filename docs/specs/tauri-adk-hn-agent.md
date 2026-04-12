@@ -276,7 +276,8 @@ def search_threads(
     date_from: str | None = None,
     date_to: str | None = None,
     sort_by: str = "relevance",
-    limit: int = 20
+    limit: int = 20,
+    offset: int = 0
 ) -> dict:
     """Search Hacker News threads by keyword, tags, and date range.
 
@@ -287,6 +288,7 @@ def search_threads(
         date_to: End date in YYYY-MM-DD format.
         sort_by: Sort order — "relevance", "date", or "comments".
         limit: Max number of results (default 20, max 50).
+        offset: Pagination offset (default 0).
 
     Returns:
         Dict with 'threads' list and 'total_count'.
@@ -298,6 +300,7 @@ def search_threads(
         "date_to": date_to,
         "sort_by": sort_by,
         "limit": min(limit, 50),
+        "offset": offset,
     })
 ```
 
@@ -305,19 +308,25 @@ def search_threads(
 
 ```python
 @tool
-def get_thread(thread_id: str, max_comments: int = 50) -> dict:
+def get_thread(
+    thread_id: str,
+    max_comments: int = 50,
+    sort_comments_by: str = "top"
+) -> dict:
     """Get the full details of a Hacker News thread including all comments.
 
     Args:
         thread_id: The HN story/thread ID.
         max_comments: Max comments to return (default 50).
+        sort_comments_by: Comment sort order — "top" (karma), "recent", or "oldest".
 
     Returns:
-        Dict with story metadata, tags, and comments tree.
+        Dict with story metadata, tags, and comment list.
     """
     return _call_backend("/api/agent/thread", {
         "thread_id": thread_id,
         "max_comments": max_comments,
+        "sort_comments_by": sort_comments_by,
     })
 ```
 
@@ -327,6 +336,7 @@ def get_thread(thread_id: str, max_comments: int = 50) -> dict:
 @tool
 def get_trending(
     time_window: str = "24h",
+    category: str | None = None,
     tag: str | None = None,
     limit: int = 10
 ) -> dict:
@@ -334,6 +344,7 @@ def get_trending(
 
     Args:
         time_window: Time window — "1h", "6h", "24h", "7d", "30d".
+        category: Optional category to filter by (e.g. "AI/ML").
         tag: Optional tag to filter trending threads by.
         limit: Number of results (default 10).
 
@@ -342,6 +353,7 @@ def get_trending(
     """
     return _call_backend("/api/agent/trending", {
         "time_window": time_window,
+        "category": category,
         "tag": tag,
         "limit": limit,
     })
@@ -784,32 +796,29 @@ Get full thread details including the comment tree. This is the "read the actual
   "comments": [
     {
       "id": 39812400,
+      "parent_id": null,
       "author": "tptacek",
       "text": "The privacy argument is strong but the latency story is more nuanced...",
       "score": 89,
-      "posted_at": "2026-03-15T10:15:00Z",
-      "depth": 0,
-      "children": [
-        {
-          "id": 39812450,
-          "author": "dang",
-          "text": "Could you elaborate on the latency comparison?",
-          "score": 34,
-          "posted_at": "2026-03-15T10:22:00Z",
-          "depth": 1,
-          "children": []
-        }
-      ]
+      "depth": 0
+    },
+    {
+      "id": 39812450,
+      "parent_id": 39812400,
+      "author": "dang",
+      "text": "Could you elaborate on the latency comparison?",
+      "score": 34,
+      "depth": 1
     }
   ]
 }
 ```
 
 **Design decisions:**
-- Comments are a nested tree (not flat) so the agent understands reply structure.
-- `depth` is denormalized for easy flattening if needed.
+- Comments are a **flat list** with `parent_id` for reply structure — ~30-40% more token-efficient than nested `children` arrays. The agent understands "this replied to that" from `parent_id` + `depth` without the structural overhead of nested JSON.
 - `max_comments` prevents blowing the context window. 50 top comments is usually enough to understand the discussion. The agent can ask for more if needed.
 - Comment `score` lets the agent focus on high-signal comments.
+- `posted_at` omitted from comments to save tokens — the agent rarely needs exact comment timestamps.
 
 ---
 
