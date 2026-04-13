@@ -115,10 +115,9 @@ llama-server \
 
 ```
 sidecar/
-├── main.py                  # FastAPI app, /chat, /chat/stream, /health
+├── main.py                  # FastAPI app — /conversations/*, /health
 ├── agent.py                 # create_agent() — assembles agent from tools
-├── agents/                  # Sub-agent definitions (empty in v1, seam for growth)
-│   └── __init__.py
+├── conversations.py         # Conversation metadata CRUD (SQLite)
 ├── tools/
 │   ├── __init__.py          # Exports all tool functions
 │   ├── search.py            # search_threads — keyword/tag/date search
@@ -128,35 +127,74 @@ sidecar/
 ├── state.py                 # State key constants + namespace helpers
 ├── prompts/
 │   └── system.py            # System prompt for the HN agent
+├── conversations.db         # (runtime) Conversation metadata
+├── sessions.db              # (runtime) ADK session state
 └── pyproject.toml
 ```
 
 #### main.py — API Surface (pseudocode)
 
+The sidecar owns all conversation state. The frontend is a pure view — it fetches the conversation list and message history from the sidecar, and never persists chat data locally.
+
 The actual ADK API uses a `Runner` that takes a session service, not direct agent calls. This pseudocode shows the intent — exact API calls will differ during implementation.
 
 ```python
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService  # DatabaseSessionService in Phase 2
+from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 from agent import create_agent
+from conversations import ConversationStore
 
-app = FastAPI()
-session_service = InMemorySessionService()  # swap to DatabaseSessionService later
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.conv_store = ConversationStore("conversations.db")
+    await app.state.conv_store.init()
+    yield
+    await app.state.conv_store.close()
+
+app = FastAPI(lifespan=lifespan)
+session_service = DatabaseSessionService(db_url="sqlite+aiosqlite:///sessions.db")
 agent = create_agent()
 runner = Runner(agent=agent, app_name="techne", session_service=session_service)
 
 USER_ID = "local"  # single-user desktop app
 
-@app.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
-    session = await session_service.get_session(
-        app_name="techne", user_id=USER_ID, session_id=request.session_id
-    ) or await session_service.create_session(
-        app_name="techne", user_id=USER_ID
+# --- Conversation CRUD ---
+
+@app.get("/conversations")
+async def list_conversations():
+    """List all conversations, most recent first."""
+    return await app.state.conv_store.list_all()
+
+@app.post("/conversations")
+async def create_conversation():
+    """Create a new conversation. Returns { id, title, created_at }."""
+    conv = await app.state.conv_store.create()
+    # Create the ADK session with the same ID
+    await session_service.create_session(
+        app_name="techne", user_id=USER_ID, session_id=conv["id"]
     )
+    return conv
+
+@app.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str):
+    """Delete a conversation and its ADK session."""
+    await app.state.conv_store.delete(conv_id)
+    await session_service.delete_session(
+        app_name="techne", user_id=USER_ID, session_id=conv_id
+    )
+    return {"status": "deleted"}
+
+# --- Chat ---
+
+@app.post("/conversations/{conv_id}/chat/stream")
+async def chat_stream(conv_id: str, request: ChatRequest):
+    """Send a message and stream the agent's response as SSE events."""
+    # Update conversation timestamp and title (if first message)
+    await app.state.conv_store.touch(conv_id, first_message=request.message)
 
     content = types.Content(
         role="user", parts=[types.Part(text=request.message)]
@@ -164,7 +202,7 @@ async def chat_stream(request: ChatRequest):
 
     async def generate():
         async for event in runner.run_async(
-            user_id=USER_ID, session_id=session.id, new_message=content
+            user_id=USER_ID, session_id=conv_id, new_message=content
         ):
             # Emit tool-call events so frontend can show "Searching...", "Reading thread..."
             if event.actions and event.actions.tool_calls:
@@ -191,6 +229,82 @@ def health():
 - `tool_result` — tool returned data (optionally render thread cards)
 - `text` — agent is generating response text (stream to UI)
 - `agent_transfer` — (v1.5+) control moved to a sub-agent
+
+#### conversations.py — Metadata Store
+
+Thin SQLite wrapper for conversation metadata. Separate from ADK's `sessions.db` to avoid migration conflicts when ADK changes their schema.
+
+```python
+import aiosqlite
+import uuid
+from datetime import datetime, timezone
+
+class ConversationStore:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.db: aiosqlite.Connection | None = None
+
+    async def init(self):
+        self.db = await aiosqlite.connect(self.db_path)
+        self.db.row_factory = aiosqlite.Row
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT 'New conversation',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await self.db.commit()
+
+    async def close(self):
+        if self.db:
+            await self.db.close()
+
+    async def create(self) -> dict:
+        conv_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (conv_id, "New conversation", now, now),
+        )
+        await self.db.commit()
+        return {"id": conv_id, "title": "New conversation", "created_at": now, "updated_at": now}
+
+    async def list_all(self) -> list[dict]:
+        cursor = await self.db.execute(
+            "SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def touch(self, conv_id: str, first_message: str | None = None):
+        """Update timestamp. If title is still default and first_message provided, set title."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self.db.execute("SELECT title FROM conversations WHERE id = ?", (conv_id,))
+        row = await cursor.fetchone()
+        if row and row["title"] == "New conversation" and first_message:
+            title = first_message[:60].strip()
+            await self.db.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (title, now, conv_id),
+            )
+        else:
+            await self.db.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id)
+            )
+        await self.db.commit()
+
+    async def delete(self, conv_id: str):
+        await self.db.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+        await self.db.commit()
+```
+
+**Two SQLite files at runtime:**
+- `conversations.db` — owned by us, simple schema we control
+- `sessions.db` — owned by ADK, stores full turn history and agent state
+
+This separation means ADK schema breaking changes (which have happened — v0→v1 in ADK 1.22) only require deleting `sessions.db`. The conversation list in `conversations.db` survives.
 
 #### agent.py — ADK Agent Setup
 
@@ -425,19 +539,47 @@ export interface AgentEvent {
   data: Record<string, unknown>;
 }
 
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Conversation CRUD ---
+
+export async function listConversations(): Promise<Conversation[]> {
+  const res = await fetch(`${SIDECAR_URL}/conversations`);
+  if (!res.ok) throw new Error(`Failed to list conversations: ${res.status}`);
+  return res.json();
+}
+
+export async function createConversation(): Promise<Conversation> {
+  const res = await fetch(`${SIDECAR_URL}/conversations`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to create conversation: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const res = await fetch(`${SIDECAR_URL}/conversations/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete conversation: ${res.status}`);
+}
+
+// --- Chat ---
+
 export interface SendMessageOptions {
   message: string;
-  sessionId: string;
+  conversationId: string;
   onEvent?: (event: AgentEvent) => void;  // all event types
   onText?: (text: string) => void;         // convenience: accumulated text
   signal?: AbortSignal;                     // cancellation
 }
 
 export async function sendMessage(opts: SendMessageOptions): Promise<string> {
-  const response = await fetch(`${SIDECAR_URL}/chat/stream`, {
+  const response = await fetch(`${SIDECAR_URL}/conversations/${opts.conversationId}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: opts.message, session_id: opts.sessionId }),
+    body: JSON.stringify({ message: opts.message }),
     signal: opts.signal,
   });
 
@@ -477,26 +619,33 @@ The frontend uses `onEvent` to show agent activity:
 - `text` → stream response text to the chat bubble
 - `agent_transfer` (v1.5+) → show which sub-agent is active
 
-### 6. Session Management
+**No local chat storage.** The frontend does not persist conversations or messages in Dexie/IndexedDB. The sidecar is the single source of truth. On app open, the frontend calls `GET /conversations` to populate the sidebar. When the user opens a conversation, message history comes from the ADK session (see open question below on how to expose this).
 
-**Role**: Track conversation state across the agent tree.
+### 6. Session & Conversation Management
 
-ADK provides built-in session management with pluggable backends:
+**Role**: Track conversation state across the agent tree. The sidecar owns all conversation state — the frontend never persists chat data locally.
 
-- **Phase 1-2**: `InMemorySessionService` — simplest, no persistence. Conversations lost on sidecar restart. Good enough for initial development.
-- **Phase 2+**: `DatabaseSessionService(db_url="sqlite+aiosqlite:///sessions.db")` — SQLite-backed persistence. Conversations survive restarts.
+**Design**: Two storage layers, both SQLite:
+
+| Store | File | Owner | Contains |
+|-------|------|-------|----------|
+| Conversation metadata | `conversations.db` | Us (`conversations.py`) | id, title, created_at, updated_at |
+| Agent session state | `sessions.db` | ADK (`DatabaseSessionService`) | Full turn history, tool call/result pairs, agent state |
 
 ```python
-# Phase 1
-from google.adk.sessions import InMemorySessionService
-session_service = InMemorySessionService()
-
-# Phase 2+ (swap one line)
 from google.adk.sessions import DatabaseSessionService
 session_service = DatabaseSessionService(db_url="sqlite+aiosqlite:///sessions.db")
 ```
 
-**Note**: ADK's `DatabaseSessionService` requires `aiosqlite` as an async SQLite driver. The session schema has had breaking changes (v0→v1 in ADK 1.22) and has no Alembic migration support yet. For a single-user desktop app, deleting the SQLite file on schema changes is acceptable.
+**Why SQLite from day 1**: The sidecar owns conversations, so persistence is not optional — a restart would erase everything. `InMemorySessionService` is skipped entirely.
+
+**Why two files**: ADK's session schema has had breaking changes (v0→v1 in ADK 1.22) with no Alembic migration support. Keeping stores separate means an ADK schema change only requires deleting `sessions.db`. The conversation list in `conversations.db` survives — users see their conversations but the agent loses turn context (acceptable for a single-user desktop app).
+
+**Conversation lifecycle**:
+1. User clicks "New conversation" → `POST /conversations` → creates metadata row + ADK session
+2. User sends message → `POST /conversations/{id}/chat/stream` → updates `updated_at`, sets title from first message
+3. User deletes conversation → `DELETE /conversations/{id}` → removes metadata row + ADK session
+4. User opens app → `GET /conversations` → returns list ordered by `updated_at` DESC
 
 ## Agent Topology
 
@@ -645,30 +794,31 @@ tauri-plugin-shell = "2"  # For sidecar process management
 
 ### Phase 1: Agent core
 
-Get the agent loop working end-to-end.
+Get the agent loop working end-to-end with persistent conversations.
 
 1. **Set up llama-server** — download binary + GGUF, test tool calling manually with `curl`
-2. **Rewrite sidecar** — replace current `sidecar/main.py` with ADK agent + LiteLLM + 2 basic tools (`search_threads`, `get_thread`)
-3. **Verify agent loop** — test multi-step reasoning from the terminal (no UI yet)
-4. **Wire up frontend** — replace `TauriWebLLMClient` with `agentClient.ts`, simplify `ChatInterface.tsx`
-5. **Tauri process management** — spawn llama-server + sidecar from Rust, health checks
+2. **Rewrite sidecar** — replace current `sidecar/main.py` with ADK agent + LiteLLM + DatabaseSessionService (SQLite) + 2 basic tools (`search_threads`, `get_thread`)
+3. **Conversation CRUD** — implement `conversations.py` metadata store + REST endpoints (`GET/POST/DELETE /conversations`, `POST /conversations/{id}/chat/stream`)
+4. **Verify agent loop** — test multi-step reasoning and conversation persistence from the terminal (no UI yet)
+5. **Wire up frontend** — replace `TauriWebLLMClient` with `agentClient.ts` (conversation CRUD + chat streaming), simplify `ChatInterface.tsx` to conversation list + chat view
+6. **Tauri process management** — spawn llama-server + sidecar from Rust, health checks, basic crash detection and restart
 
-**Milestone**: User can chat with HN through the desktop app. Agent searches, fetches threads, and synthesizes answers across multiple tool calls.
+**Milestone**: User can create conversations, chat with HN, and find their conversation list intact after restarting the app.
 
-### Phase 2: Streaming + more tools
+### Phase 2: Streaming UX + more tools
 
-6. **Streaming** — SSE streaming from sidecar to frontend with tool-call events for real-time status
-7. **Add remaining tools** — `get_trending`, `get_user_threads`
-8. **Session persistence** — swap `InMemorySessionService` for `DatabaseSessionService`, conversation resume on restart
+7. **Streaming** — SSE streaming from sidecar to frontend with tool-call events for real-time status
+8. **Add remaining tools** — `get_trending`, `get_user_threads`
+9. **Message history endpoint** — expose ADK session turn history so the frontend can render past messages when opening a conversation
 
-**Milestone**: Streaming UX with agent activity visibility, richer queries, persistent conversations.
+**Milestone**: Streaming UX with agent activity visibility, richer queries, full conversation history navigation.
 
 ### Phase 3: Polish
 
-9. **Error handling** — graceful recovery from llama-server crashes, sidecar timeouts
-10. **Model hot-swap** — settings UI to pick a different GGUF without restarting the app
-11. **Remove dead code** — delete all WebLLM, intent detection, and in-browser tool orchestration code
-12. **Packaging** — bundle llama-server binary and GGUF model with the Tauri app
+10. **Error handling** — graceful recovery from llama-server crashes, sidecar timeouts
+11. **Model hot-swap** — settings UI to pick a different GGUF without restarting the app
+12. **Remove dead code** — delete all WebLLM, intent detection, and in-browser tool orchestration code
+13. **Packaging** — bundle llama-server binary and GGUF model with the Tauri app
 
 ## What gets deleted
 
@@ -968,3 +1118,5 @@ All under `/api/agent/` prefix to separate from existing endpoints.
 2. **Streaming from ADK** — Does ADK support streaming tool-call events through LiteLLM to llama-server? Need to verify this path works.
 3. **App size** — The GGUF model is ~4.5GB. Should it be bundled or downloaded on first launch?
 4. **Backend search strategy** — Does the backend already have full-text or vector search over threads? If keyword-only, is that sufficient for v1 given the agent can interpret results?
+5. **Message history retrieval** — When the user opens an existing conversation, the frontend needs to display past messages. Does ADK's `get_session()` return the full turn history (user messages + agent responses + tool calls) in a serializable format? If not, we need either: (a) a `/conversations/{id}/messages` endpoint that reads from the ADK session and reformats for the frontend, or (b) to store messages in `conversations.db` alongside metadata. Option (a) is preferred to avoid duplicating data.
+6. **Startup UX** — The conversation list comes from the sidecar, which requires llama-server + sidecar to be running. Cold start is 5-15s. Should the Tauri shell cache the conversation list and show it immediately while processes spin up? Or is a loading state sufficient?
