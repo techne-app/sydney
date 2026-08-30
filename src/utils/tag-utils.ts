@@ -20,9 +20,13 @@ export async function fetchStoryTags(
                 tag_types: tagTypes
             })
         });
+        if (!response.ok) {
+            logger.error(`fetchStoryTags: HTTP ${response.status} ${response.statusText} from ${CONFIG.BASE_URL}${CONFIG.ENDPOINTS.STORY_TAGS}`);
+            return [];
+        }
         return await response.json();
     } catch (error) {
-        logger.api('Error fetching story tags:', error);
+        logger.error('fetchStoryTags failed (network/parse):', error);
         return [];
     }
 }
@@ -34,9 +38,13 @@ export async function fetchThreadTags(threadIds: number[]): Promise<ThreadData[]
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ thread_ids: threadIds })
         });
+        if (!response.ok) {
+            logger.error(`fetchThreadTags: HTTP ${response.status} ${response.statusText} from ${CONFIG.BASE_URL}${CONFIG.ENDPOINTS.THREAD_TAGS}`);
+            return [];
+        }
         return await response.json();
     } catch (error) {
-        logger.api('Error fetching thread tags:', error);
+        logger.error('fetchThreadTags failed (network/parse):', error);
         return [];
     }
 }

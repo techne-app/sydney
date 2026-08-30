@@ -2,7 +2,7 @@ import { ThreadCardData } from '../types/chat';
 import { logger } from './logger';
 
 export class ThreadContextService {
-  private static readonly API_BASE_URL = 'https://techne-pipeline-func-prod.azurewebsites.net/api';
+  private static readonly API_BASE_URL = 'https://www.techne.app/api';
 
   /**
    * Fetch thread cards for sidebar context
@@ -11,7 +11,7 @@ export class ThreadContextService {
    */
   static async fetchThreadCards(numCards: number = 3): Promise<ThreadCardData[]> {
     try {
-      const response = await fetch(`${this.API_BASE_URL}/thread-cards`, {
+      const response = await fetch(`${this.API_BASE_URL}/thread-cards/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
