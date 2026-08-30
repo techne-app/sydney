@@ -20,3 +20,7 @@ src-tauri/target/
 
 # Nuitka build artifacts
 sidecar/build/
+
+# Python (all dirs)
+__pycache__/
+*.pyc

@@ -86,8 +86,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   // Helper function to handle tool execution using new AsyncGenerator pattern
   const handleToolExecution = async (
-    userMessage: string, 
-    workingConversation: Conversation, 
+    // OLD: userMessage: string,  (replaced by full history so /route has context)
+    routeMessages: { role: string; content: string }[],
+    workingConversation: Conversation,
     assistantMessage: ChatMessage
   ): Promise<boolean> => {
     try {
@@ -97,8 +98,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         pinnedThread: pinnedCard
       };
 
-      // Use new AsyncGenerator approach
-      for await (const progress of toolOrchestrator.executeTools(userMessage, context)) {
+      // Route via the sidecar; stream progress events
+      // OLD: for await (const progress of toolOrchestrator.executeTools(userMessage, context)) {
+      for await (const progress of toolOrchestrator.executeTools(routeMessages, context)) {
         switch (progress.type) {
           case 'status':
             // Status messages removed - no more temp status clutter
@@ -111,26 +113,64 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               isStreaming: true
             } : null);
             break;
-          case 'complete':
-            // Tool execution completed
-            const wasToolCalled = progress.data?.wasToolCalled || (progress.data?.success !== undefined);
-            if (wasToolCalled) {
-              // Finalize the streaming message
+          case 'complete': {
+            const data = progress.data;
+            const toolRan = data?.wasToolCalled === true || data?.success !== undefined;
+            if (toolRan) {
+              // Tool wrote its content to the DB during execution; just finalize.
               setStreamingMessage(prev => prev ? {
                 ...prev,
                 isStreaming: false
               } : null);
-              
-              // Get final updated conversation after tool execution
+
               const finalConversation = await ConversationManager.getConversation(workingConversation.id);
               if (finalConversation) {
                 onConversationUpdated(finalConversation);
               }
-              
+
               setStreamingMessage(null);
-              return true; // Tool was called
+              return true; // Tool handled the response
             }
-            return false; // No tool was called
+
+            // Option A: /route returned a conversational reply — use it directly.
+            // If empty (e.g. /route failed), fall through to the plain chat path.
+            if (typeof data?.reply === 'string' && data.reply.trim().length > 0) {
+              const reply = data.reply;
+              setStreamingMessage(prev => prev ? {
+                ...prev,
+                content: reply,
+                isStreaming: false
+              } : null);
+
+              await ConversationManager.updateMessage(
+                workingConversation.id,
+                assistantMessage.id,
+                reply
+              );
+
+              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+              if (finalConversation) {
+                onConversationUpdated(finalConversation);
+              }
+
+              setStreamingMessage(null);
+              return true; // Chat reply handled by /route
+            }
+
+            return false; // Not handled → fall through to the chat path
+
+            /* OLD complete-case (pre-/route), kept for migration reference:
+            const wasToolCalled = progress.data?.wasToolCalled || (progress.data?.success !== undefined);
+            if (wasToolCalled) {
+              setStreamingMessage(prev => prev ? { ...prev, isStreaming: false } : null);
+              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+              if (finalConversation) { onConversationUpdated(finalConversation); }
+              setStreamingMessage(null);
+              return true;
+            }
+            return false;
+            */
+          }
           case 'error':
             logger.error('Tool execution error:', progress.error);
             return false;
@@ -303,9 +343,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       const isModelLoaded = webLLMClient.isModelLoaded();
       logger.model('Model loaded check:', isModelLoaded);
       
-      // Try tool execution first (works whether model is loaded or not)
-      logger.model('Checking for tool execution...');
-      const toolWasCalled = await handleToolExecution(userMessage, workingConversation, assistantMessage);
+      // Build conversation history for the router (includes the just-added user
+      // message; the empty assistant streaming message is not yet in it).
+      const routeMessages = (conversationForHistory?.messages ?? []).map(m => ({
+        role: m.role,
+        content: m.content,
+      }));
+      if (routeMessages.length === 0) {
+        routeMessages.push({ role: 'user', content: userMessage });
+      }
+
+      // Route via the sidecar LLM first (tool call vs chat)
+      logger.model('Routing message via sidecar /route...');
+      // OLD: const toolWasCalled = await handleToolExecution(userMessage, workingConversation, assistantMessage);
+      const toolWasCalled = await handleToolExecution(routeMessages, workingConversation, assistantMessage);
       
       if (toolWasCalled) {
         logger.debug('Tool was executed, stopping here');
