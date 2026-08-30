@@ -6,6 +6,8 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "pydantic",
-    "llama-cpp-python",
+    # >=0.3.35: earlier builds bundle a llama.cpp that rejects Gemma 4 with
+    # "unknown model architecture: 'gemma4'".
+    "llama-cpp-python>=0.3.35",
     "nuitka>=4.0.7",
 ]
