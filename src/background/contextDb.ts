@@ -40,6 +40,27 @@ class ContextDB extends Dexie {
   }
 
   async storeTag(tag: string, type: string, anchor: string): Promise<number> {
+    // Visited threads are a "recents" list, so re-opening one should move it
+    // to the top rather than add a second row. The panel shows a limited
+    // number of entries, so duplicates push genuinely different threads out
+    // of view — five visits to one thread would hide four others.
+    //
+    // Scoped to visited_thread on purpose: other tag types are a record of
+    // what was clicked and how often, which the extension's personalization
+    // ranks on, so collapsing those would change their meaning.
+    if (type === 'visited_thread') {
+      // `anchor` isn't indexed, but this table only ever holds a user's own
+      // history, so a scan is cheaper than a schema migration to add one.
+      const existing = await this.tags
+        .filter(t => t.type === 'visited_thread' && t.anchor === anchor)
+        .first();
+
+      if (existing?.id !== undefined) {
+        await this.tags.update(existing.id, { tag, timestamp: Date.now() });
+        return existing.id;
+      }
+    }
+
     return await this.tags.add({
       tag,
       type,
@@ -70,6 +91,16 @@ class ContextDB extends Dexie {
   }
 
   async storeSearch(query: string): Promise<number> {
+    // Same rule as visited threads: repeating a search moves it to the top
+    // instead of stacking another row. The two panels sit side by side, so
+    // one collapsing duplicates while the other didn't would read as a bug.
+    const existing = await this.searches.where('query').equals(query).first();
+
+    if (existing?.id !== undefined) {
+      await this.searches.update(existing.id, { timestamp: Date.now() });
+      return existing.id;
+    }
+
     return await this.searches.add({
       query,
       timestamp: Date.now()

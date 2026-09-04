@@ -131,12 +131,22 @@ function recordVisit(anchor: HTMLAnchorElement) {
     .catch((err: any) => console.debug('[chrome-shim] storeTag failed', err));
 }
 
-// Intercept all target="_blank" link clicks and open them in the system browser via Rust
+// Opening external links is tauri-plugin-shell's job — its injected script
+// already catches target="_blank" clicks and calls `plugin:shell|open`, so the
+// custom open_external_url command was doing the same work a second time. That
+// duplicate is what produced "shell.open not allowed" on every click: the
+// plugin fired too and was denied, since capabilities granted only core:default.
+//
+// We now grant shell:allow-open and let the plugin open the link — which also
+// means the URL goes through its scope validation rather than straight into
+// `open` with no checks. This listener only records the visit.
+//
+// Deliberately no preventDefault/stopPropagation: the plugin's listener sits on
+// body in the bubble phase, and React binds at the root container, so stopping
+// propagation here would also kill ThreadCard's own click handler.
 document.addEventListener('click', (e) => {
   const anchor = (e.target as HTMLElement).closest('a');
   if (anchor && anchor.target === '_blank' && anchor.href) {
-    e.preventDefault();
-    (window as any).__TAURI_INTERNALS__?.invoke('open_external_url', { url: anchor.href });
     // Every external link passes through here, so this is the one place that
     // sees thread opens from chat search results as well as from the sidebar.
     recordVisit(anchor as HTMLAnchorElement);

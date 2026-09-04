@@ -267,6 +267,11 @@ def route(request: RouteRequest):
         the executor would only report that there is no thread. The model does
         reach for it on phrasings like "what was the second one about?", so
         enforce the precondition here rather than trusting the prompt.
+
+        Note: search_threads is deliberately NOT guarded for a missing keyword.
+        Suppressing it and replying "what would you like me to search for?" put
+        that question in the history, which made the model drop the argument
+        again on the next turn — a loop that never recovered.
         """
         if name == "summarize_pinned_thread" and not request.pinned_thread:
             print("[route] ignoring summarize_pinned_thread — nothing is pinned")
@@ -304,6 +309,12 @@ def route(request: RouteRequest):
         retry_content = retry["choices"][0]["message"].get("content") or ""
         retry_content = _GEMMA_THOUGHT_RE.sub("", retry_content)
         reply = _GEMMA_CALL_RE.sub("", retry_content).strip()
+
+    # The retry can come back empty too. /route is now the only path to the
+    # model — there's no /chat fallback behind it — so an empty reply would
+    # leave the user looking at nothing at all.
+    if not reply:
+        reply = "Sorry — I didn't catch that. Could you rephrase?"
 
     return {"type": "chat", "reply": reply}
 
