@@ -67,9 +67,10 @@ export class ConversationManager {
   static async updateMessage(
     conversationId: string,
     messageId: string,
-    content: string
+    content: string,
+    extra?: Partial<ChatMessage>
   ): Promise<void> {
-    await contextDb.updateMessageInConversation(conversationId, messageId, content);
+    await contextDb.updateMessageInConversation(conversationId, messageId, content, extra);
   }
 
   static async updateConversationTitle(

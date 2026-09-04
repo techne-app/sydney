@@ -17,12 +17,18 @@ export class ThreadSummaryTool implements Tool {
       };
       
       const summaryResponse = this.generatePinnedThreadSummary(pureContext.pinnedThread);
-      
-      // Always update database regardless of UI callbacks
+
+      // Always update database regardless of UI callbacks. The toolCall marker
+      // lets /route replay this with the proper roles rather than as prose the
+      // model appears to have written itself — see ChatMessage.toolCall.
       await ConversationManager.updateMessage(
         pureContext.conversationId,
         pureContext.messageId,
-        summaryResponse
+        summaryResponse,
+        {
+          toolCall: { name: 'summarize_pinned_thread', arguments: {} },
+          toolResult: JSON.stringify({ summary: summaryResponse }),
+        }
       );
       
       // Legacy progress callback

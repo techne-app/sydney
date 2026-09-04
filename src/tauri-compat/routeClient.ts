@@ -13,6 +13,15 @@ const SIDECAR_URL = 'http://localhost:8000';
 export interface RouteMessage {
   role: string;
   content: string;
+  /** Assistant turn that called a tool. Mirrors the OpenAI/Gemma message shape. */
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+  /** Tool-role turn carrying the result of the call above. */
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface RouteResult {
