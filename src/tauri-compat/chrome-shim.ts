@@ -113,12 +113,33 @@ document.addEventListener('pointerup', (e: PointerEvent) => {
 
 document.addEventListener('pointercancel', () => { _removeGhost(); dataTransferCache.clear(); }, true);
 
+// A thread the user actually opened, wherever the link came from.
+const HN_ITEM_URL = /^https?:\/\/news\.ycombinator\.com\/item\?id=/;
+
+function recordVisit(anchor: HTMLAnchorElement) {
+  // Cards record their own visit (ThreadCard has the theme to hand, which makes
+  // a better label than link text) and mark themselves so we don't double-store.
+  if (anchor.dataset.visitRecorded === 'true') return;
+  if (!HN_ITEM_URL.test(anchor.href)) return;
+
+  const label = (anchor.textContent || '').trim();
+  if (!label) return;
+
+  contextDb
+    .storeTag(label, 'visited_thread', anchor.href)
+    .then(() => dispatchMessage({ type: MessageType.TAGS_UPDATED, data: {} }))
+    .catch((err: any) => console.debug('[chrome-shim] storeTag failed', err));
+}
+
 // Intercept all target="_blank" link clicks and open them in the system browser via Rust
 document.addEventListener('click', (e) => {
   const anchor = (e.target as HTMLElement).closest('a');
   if (anchor && anchor.target === '_blank' && anchor.href) {
     e.preventDefault();
     (window as any).__TAURI_INTERNALS__?.invoke('open_external_url', { url: anchor.href });
+    // Every external link passes through here, so this is the one place that
+    // sees thread opens from chat search results as well as from the sidebar.
+    recordVisit(anchor as HTMLAnchorElement);
   }
 }, true);
 

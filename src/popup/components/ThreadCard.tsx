@@ -222,12 +222,17 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
 
           {/* Metrics Row */}
           <div className="mb-3 flex justify-center text-xs font-mono">
+            {/* data-visit-recorded: handleThreadClick already stores the visit,
+                using the theme as the label. This tells the global click
+                interceptor in chrome-shim to skip the link rather than storing
+                it again from the link text ("Join the thread - N comments"). */}
             <a
               href={anchor}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-[#0066cc] hover:underline"
               onClick={handleThreadClick}
+              data-visit-recorded="true"
             >
               <MessageCircle className={`w-3 h-3 transition-all duration-500 ${
                 isAnimating ? 'text-[#ff6600] animate-pulse' : ''
