@@ -1,6 +1,7 @@
 # Techne — Desktop App Setup
 
-> macOS only (Apple Silicon). Requires ~3GB disk space for the AI model.
+> macOS only (Apple Silicon). Requires ~13GB disk space for the AI models, and
+> 24GB RAM to run them comfortably.
 
 ## Prerequisites
 
@@ -40,12 +41,35 @@ cd sydney
 npm install
 ```
 
-**Step 7 — Download the AI model** *(~2.5GB — go grab a coffee)*
+**Step 7 — Download the AI models** *(~12GB — go grab a coffee)*
+
+Two models: Gemma 4 answers and reranks, nomic embeds search queries. The
+embedding model is not optional — it has to be the one that produced the
+vectors stored in the backend, or search returns noise rather than weak matches.
+
 ```bash
 mkdir -p sidecar/models
-curl -L "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf" \
-  -o sidecar/models/Qwen3-4B-Q4_K_M.gguf
+
+# Chat + rerank (~12GB) — from bartowski/google_gemma-4-26B-A4B-it-GGUF
+curl -L "https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF/resolve/main/google_gemma-4-26B-A4B-it-Q3_K_M.gguf" \
+  -o sidecar/models/google_gemma-4-26B-A4B-it-Q3_K_M.gguf
+
+# Search query embeddings (~139MB)
+curl -L "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf" \
+  -o sidecar/models/nomic-embed-text-v1.5.Q8_0.gguf
 ```
+
+The same Gemma file the pipeline runs (`techne-pipeline/models/`), so copying it
+from there is faster if you have it. Note the Hugging Face copy has since been
+re-uploaded and differs slightly (13,019,981,440 vs 13,019,979,680 bytes). Gemma's
+tool-call syntax lives in the chat template *inside* the GGUF and `sidecar/main.py`
+parses it, so after a fresh download re-run the routing checks before trusting it:
+a changed template breaks search and summarize silently, without erroring.
+
+Both filenames appear in `sidecar/main.py` (`MODEL_NAME` / `EMBED_MODEL_NAME`)
+and in `src-tauri/tauri.conf.json` (`bundle.resources`). Swapping a model means
+updating both — the bundle names files explicitly so a leftover GGUF in
+`sidecar/models/` can't quietly add gigabytes to the DMG.
 
 ## Dev Mode
 
