@@ -7,6 +7,7 @@ import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
 import { ToolOrchestrator } from '../../utils/tools';
 import { ToolExecutionContext } from '../../utils/tools/toolExecution';
+import { RouteMessage } from '../../tauri-compat/routeClient';
 import { ThreadContextService } from '../../utils/ThreadContextService';
 import { logger } from '../../utils/logger';
 import { modelState } from '../../utils/modelState';
@@ -345,10 +346,37 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       
       // Build conversation history for the router (includes the just-added user
       // message; the empty assistant streaming message is not yet in it).
-      const routeMessages = (conversationForHistory?.messages ?? []).map(m => ({
-        role: m.role,
-        content: m.content,
-      }));
+      //
+      // A message a tool produced expands into three turns, so the model can
+      // tell tool output from its own prose. Replayed flat, it reads its past
+      // search results as something it wrote and answers the next search by
+      // imitating the format — inventing threads and links rather than calling
+      // the tool. See ChatMessage.toolCall.
+      const routeMessages: RouteMessage[] = [];
+      for (const m of conversationForHistory?.messages ?? []) {
+        if (m.role === 'assistant' && m.toolCall) {
+          const callId = `call_${m.id}`;
+          routeMessages.push({
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: callId,
+              type: 'function',
+              function: {
+                name: m.toolCall.name,
+                arguments: JSON.stringify(m.toolCall.arguments ?? {}),
+              },
+            }],
+          });
+          routeMessages.push({
+            role: 'tool',
+            content: m.toolResult ?? '',
+            tool_call_id: callId,
+            name: m.toolCall.name,
+          });
+        }
+        routeMessages.push({ role: m.role, content: m.content });
+      }
       if (routeMessages.length === 0) {
         routeMessages.push({ role: 'user', content: userMessage });
       }

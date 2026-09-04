@@ -78,6 +78,13 @@ corpus.start()
 class Message(BaseModel):
     role: str
     content: str
+    # Tool turns, replayed by the frontend so the model can tell its own past
+    # tool output from prose it wrote. Without these it reads previous search
+    # results as its own writing and answers the next search by imitating the
+    # format — inventing threads and links instead of calling the tool.
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
 
 class ChatRequest(BaseModel):
     messages: List[Message]
@@ -222,10 +229,24 @@ def _as_tool_call(name: str, arguments: Any) -> Dict[str, Any]:
     return {"type": "tool_call", "name": name, "arguments": arguments or {}}
 
 
+def _to_chat_message(m: Message) -> Dict[str, Any]:
+    """Rebuild a message for the chat template, keeping tool fields when present."""
+    out: Dict[str, Any] = {"role": m.role, "content": m.content}
+    if m.tool_calls:
+        # An assistant turn that called a tool carries the call, not prose.
+        out["content"] = m.content or None
+        out["tool_calls"] = m.tool_calls
+    if m.tool_call_id:
+        out["tool_call_id"] = m.tool_call_id
+    if m.name:
+        out["name"] = m.name
+    return out
+
+
 @app.post("/route")
 def route(request: RouteRequest):
     messages = [{"role": "system", "content": _build_route_system_prompt(request.pinned_thread)}]
-    messages += [{"role": m.role, "content": m.content} for m in request.messages]
+    messages += [_to_chat_message(m) for m in request.messages]
 
     # Native model template (no chat_format override) — it supports `tools`.
     # The generic chatml-function-calling handler is deliberately avoided: it
@@ -239,10 +260,23 @@ def route(request: RouteRequest):
     )
     msg = response["choices"][0]["message"]
 
+    def _usable(name: str) -> bool:
+        """Reject calls that cannot succeed given the current context.
+
+        Summarizing a pinned thread with nothing pinned has no valid outcome —
+        the executor would only report that there is no thread. The model does
+        reach for it on phrasings like "what was the second one about?", so
+        enforce the precondition here rather than trusting the prompt.
+        """
+        if name == "summarize_pinned_thread" and not request.pinned_thread:
+            print("[route] ignoring summarize_pinned_thread — nothing is pinned")
+            return False
+        return name in TOOL_NAMES
+
     # 1. Belt-and-suspenders: if a library version parsed tool_calls, trust it.
     for tc in (msg.get("tool_calls") or []):
         fn = tc.get("function", {})
-        if fn.get("name") in TOOL_NAMES:
+        if _usable(fn.get("name")):
             return _as_tool_call(fn["name"], fn.get("arguments"))
 
     content = msg.get("content") or ""
@@ -251,12 +285,26 @@ def route(request: RouteRequest):
 
     # 2. Parse the model's tool-call markers ourselves; take the first known tool.
     for call in _extract_tool_calls(content):
-        if call["name"] in TOOL_NAMES:
+        if _usable(call["name"]):
             return _as_tool_call(call["name"], call.get("arguments"))
 
     # 3. No tool call -> conversational reply (strip any stray markers).
     reply = _GEMMA_CALL_RE.sub("", content)
     reply = re.sub(r"<tool_call>.*?</tool_call>", "", reply, flags=re.DOTALL).strip()
+
+    # Stripping a suppressed tool call can leave nothing behind — the whole
+    # reply was the marker. Ask again without tools so the model has to answer
+    # in words rather than reaching for a tool it cannot use.
+    if not reply:
+        retry = llm.create_chat_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=512,
+        )
+        retry_content = retry["choices"][0]["message"].get("content") or ""
+        retry_content = _GEMMA_THOUGHT_RE.sub("", retry_content)
+        reply = _GEMMA_CALL_RE.sub("", retry_content).strip()
+
     return {"type": "chat", "reply": reply}
 
 

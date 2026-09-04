@@ -89,10 +89,19 @@ export class SearchTool implements Tool {
         await context.onProgress(content);
       }
 
+      // Record the call and the raw hits alongside the rendered text. /route
+      // replays them as tool_calls + a tool-role message so the model sees this
+      // came from a tool; without that it treats its own past output as prose
+      // it wrote, and answers the next search by imitating it instead of
+      // calling the tool.
       await ConversationManager.updateMessage(
         pureContext.conversationId,
         pureContext.messageId,
-        content
+        content,
+        {
+          toolCall: { name: 'search_threads', arguments: { keyword_filter: input.keyword_filter } },
+          toolResult: JSON.stringify(response.results ?? []),
+        }
       );
 
       logger.search('SearchTool execution completed successfully');
