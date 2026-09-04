@@ -17,8 +17,12 @@ function formatResults(query: string, hits: SearchHit[]): string {
     return `I couldn't find any discussions about "${query}". Try a different search term.`;
   }
 
+  // The theme is the link text, not a trailing "View Discussion". Reads better,
+  // and the global click interceptor in chrome-shim uses the link text as the
+  // label when it records the visit — so a generic phrase would make every
+  // visited thread show up in history as "View Discussion".
   const lines = hits.map(
-    (hit, index) => `${index + 1}. **${hit.theme}** — ${hit.story_title}\n   [View Discussion](${hit.anchor})`
+    (hit, index) => `${index + 1}. [${hit.theme}](${hit.anchor}) — ${hit.story_title}`
   );
 
   return (
