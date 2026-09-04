@@ -386,60 +386,69 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       // OLD: const toolWasCalled = await handleToolExecution(userMessage, workingConversation, assistantMessage);
       const toolWasCalled = await handleToolExecution(routeMessages, workingConversation, assistantMessage);
       
-      if (toolWasCalled) {
-        logger.debug('Tool was executed, stopping here');
-        return; // Tool handled the response, we're done
+      // /route is the only path to the model now. It always returns either a
+      // tool call or a non-empty reply, so it handles every turn it reaches.
+      //
+      // There used to be a fallback to /chat whenever /route returned nothing.
+      // That endpoint is given no tools, so when it was asked to find threads
+      // it answered by inventing them — every hallucinated result traced back
+      // to it. One door means a routing miss can give a poor answer, but never
+      // a fabricated one.
+      if (!toolWasCalled) {
+        // Only reachable if /route couldn't be reached at all. Say so, rather
+        // than leaving an empty bubble streaming with no fallback behind it.
+        logger.error('Route did not handle the turn — sidecar unreachable?');
+        const failureContent =
+          "I couldn't reach the local model just now. Check that the sidecar is running, then try again.";
+        await ConversationManager.updateMessage(
+          workingConversation.id,
+          assistantMessage.id,
+          failureContent
+        );
+        const failedConversation = await ConversationManager.getConversation(workingConversation.id);
+        if (failedConversation) {
+          onConversationUpdated(failedConversation);
+        }
+        setStreamingMessage(null);
+        return;
       }
 
-      // No tool was called, proceed with regular chat
-      logger.chat('No tool executed, starting chat conversation...');
+      logger.debug('Route handled the turn');
+      return;
 
-      // Prepare chat history for the engine (using conversation fetched before assistant message creation)
-      const chatHistory: ChatCompletionMessageParam[] = conversationForHistory?.messages.map(msg => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content
-      })) || [];
-
-      // Use WebLLM client for chat (model loading handled by observable)
-      try {
-        await webLLMClient.chat({
-          messages: chatHistory,
-          config: {
-            model: config.model,
-            temperature: config.temperature,
-            topP: config.topP,
-            maxTokens: config.maxTokens,
-            stream: true,
-          },
-          onUpdate: (message) => {
-            // Update streaming message
-            setStreamingMessage(prev => prev ? {
-              ...prev,
-              content: message
-            } : null);
-          },
-          onFinish: async (message) => {
-            // Update the message in the database
-            await ConversationManager.updateMessage(workingConversation.id, assistantMessage.id, message);
-            
-            // Get final updated conversation
-            const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-            if (finalConversation) {
-              onConversationUpdated(finalConversation);
-            }
-
-            setStreamingMessage(null);
-          },
-          onError: (errorMessage) => {
-            logger.error('WebLLM chat error:', errorMessage);
-            setError(getUserFriendlyErrorMessage(errorMessage));
-            setStreamingMessage(null);
-          }
-        });
-      } catch (error) {
-        logger.error('WebLLM chat failed:', error);
-        setError('Chat failed to start');
-      }
+      /* --- OLD fallback to the tool-less /chat endpoint. Kept for reference;
+       * delete once the single-path routing is proven.
+       *
+       * const chatHistory: ChatCompletionMessageParam[] = conversationForHistory?.messages.map(msg => ({
+       *   role: msg.role as 'user' | 'assistant',
+       *   content: msg.content
+       * })) || [];
+       *
+       * try {
+       *   await webLLMClient.chat({
+       *     messages: chatHistory,
+       *     config: { model: config.model, temperature: config.temperature,
+       *               topP: config.topP, maxTokens: config.maxTokens, stream: true },
+       *     onUpdate: (message) => {
+       *       setStreamingMessage(prev => prev ? { ...prev, content: message } : null);
+       *     },
+       *     onFinish: async (message) => {
+       *       await ConversationManager.updateMessage(workingConversation.id, assistantMessage.id, message);
+       *       const finalConversation = await ConversationManager.getConversation(workingConversation.id);
+       *       if (finalConversation) { onConversationUpdated(finalConversation); }
+       *       setStreamingMessage(null);
+       *     },
+       *     onError: (errorMessage) => {
+       *       logger.error('WebLLM chat error:', errorMessage);
+       *       setError(getUserFriendlyErrorMessage(errorMessage));
+       *       setStreamingMessage(null);
+       *     }
+       *   });
+       * } catch (error) {
+       *   logger.error('WebLLM chat failed:', error);
+       *   setError('Chat failed to start');
+       * }
+       */
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to get response');
       logger.error('Error during chat:', err);
