@@ -7,6 +7,9 @@ import os
 import re
 import json
 
+import numpy as np
+
+import corpus
 from tools import TOOLS, TOOL_NAMES  # single source of truth for tool schemas
 
 app = FastAPI()
@@ -19,24 +22,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load model once at startup
+# Load models once at startup
 import sys
 BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+
+def resolve_model(name: str) -> str:
+    """Locate a GGUF in the bundled .app or in the dev checkout.
+
+    Production: bundled inside .app at Contents/Resources/models/ — tauri.conf.json
+    maps the whole sidecar/models/ directory there, so any GGUF dropped in it is
+    picked up with no config change.
+    Dev: main.py runs from sidecar/, so the models sit alongside it.
+    """
+    bundled = os.path.join(BASE_DIR, "..", "Resources", "models", name)
+    local = os.path.join(BASE_DIR, "models", name)
+    return bundled if os.path.exists(bundled) else local
+
+
 MODEL_NAME = "google_gemma-4-26B-A4B-it-Q3_K_M.gguf"  # was Qwen3-4B-Q4_K_M.gguf
-# Production: bundled inside .app at Contents/Resources/models/
-RESOURCES_MODEL = os.path.join(BASE_DIR, "..", "Resources", "models", MODEL_NAME)
-# Dev: uv run main.py from sidecar/, model is at sidecar/models/
-LOCAL_MODEL = os.path.join(BASE_DIR, "models", MODEL_NAME)
-MODEL_PATH = RESOURCES_MODEL if os.path.exists(RESOURCES_MODEL) else LOCAL_MODEL
+MODEL_PATH = resolve_model(MODEL_NAME)
+# The embedding model MUST be the one that produced the stored vectors —
+# nomic-embed-text-v1.5, 768-dim (techne-pipeline/scripts/start_embedding_server.sh).
+# A query embedded by any other model lands in a different vector space, and
+# cosine against it returns noise rather than weak matches.
+EMBED_MODEL_NAME = "nomic-embed-text-v1.5.Q8_0.gguf"
+EMBED_MODEL_PATH = resolve_model(EMBED_MODEL_NAME)
 
 print(f"Loading model from {MODEL_PATH}...")
 llm = Llama(
     model_path=MODEL_PATH,
     n_gpu_layers=-1,   # -1 = offload all layers to Metal GPU
-    n_ctx=4096,        # context window
+    n_ctx=8192,        # 100 rerank candidates run ~3k tokens; 4096 was too tight
     verbose=False,
 )
 print("Model loaded.")
+
+# CPU-only on purpose: the pipeline runs its embedder with -ngl 0 to keep the
+# Metal context free for the chat model, and that matters more here with 12GB of
+# Gemma already on the GPU. Embedding one short query per search is cheap on CPU.
+print(f"Loading embedding model from {EMBED_MODEL_PATH}...")
+embedder = Llama(
+    model_path=EMBED_MODEL_PATH,
+    embedding=True,
+    n_gpu_layers=0,
+    verbose=False,
+)
+print("Embedding model loaded.")
+
+# Start syncing the 30-day thread corpus in the background. Non-blocking: this
+# runs while Gemma loads, so the ~44s download costs the user nothing.
+corpus.start()
 
 
 class Message(BaseModel):
@@ -224,9 +260,122 @@ def route(request: RouteRequest):
     return {"type": "chat", "reply": reply}
 
 
+class SearchRequest(BaseModel):
+    query: str
+    limit: int = 3
+
+
+# How many candidates the embedding stage hands to the reranker. Mirrors the
+# pipeline's feed generation, which cosines to 100 and then has the LLM pick ~6;
+# we ask for 3.
+RERANK_CANDIDATES = 100
+
+
+def _build_rerank_prompt(query: str, candidates, limit: int) -> str:
+    listing = "\n".join(
+        f"{i + 1}. {meta.get('story_title', '')} — {meta.get('theme', '')}"
+        for i, (meta, _) in enumerate(candidates)
+    )
+    return (
+        f"A user searched Hacker News for: \"{query}\"\n\n"
+        f"Below are {len(candidates)} candidate discussions, already filtered by "
+        "semantic similarity. Pick the "
+        f"{limit} most genuinely relevant to what the user is asking for.\n\n"
+        f"{listing}\n\n"
+        f"Reply with ONLY the {limit} numbers, best first, separated by commas. "
+        "No explanation, no other text."
+    )
+
+
+def _parse_rerank_picks(text: str, count: int, limit: int):
+    """Pull the chosen indices out of the model's reply.
+
+    Deliberately just scrapes integers rather than asking for JSON or a tool
+    call — Gemma's structured output is quirky enough (see _extract_tool_calls),
+    and a bare list of numbers is the one format it is hard to get wrong. Any
+    out-of-range or duplicate number is dropped; if nothing usable comes back
+    the caller falls back to plain cosine order.
+    """
+    picks = []
+    for token in re.findall(r"\d+", text):
+        index = int(token) - 1
+        if 0 <= index < count and index not in picks:
+            picks.append(index)
+        if len(picks) == limit:
+            break
+    return picks
+
+
+@app.post("/search")
+def search(request: SearchRequest):
+    if not corpus.is_ready():
+        return {"results": [], "error": "Thread data is still loading, try again shortly.",
+                "corpus": corpus.status()}
+
+    query = request.query.strip()
+    if not query:
+        return {"results": [], "error": "Empty query."}
+
+    # "search_query: " is required, not decorative: every theme was stored with
+    # the "search_document: " prefix, and nomic places queries and documents
+    # differently. The wrong prefix degrades relevance silently — no error.
+    embedding = embedder.create_embedding(f"search_query: {query}")
+    vector = np.asarray(embedding["data"][0]["embedding"], dtype=np.float32)
+    norm = np.linalg.norm(vector)
+    if norm > 0:
+        vector = vector / norm
+
+    # Pull well past RERANK_CANDIDATES, then keep only the best-scoring thread
+    # per story. A row is one comment thread, not one story, so a popular post
+    # contributes dozens of near-identical rows — without this, a query like
+    # "self hosting email" returns three threads from the same discussion.
+    # (Note this is per-story on purpose; the corpus itself is still keyed by
+    # thread_id, which is what makes delta merges correct.)
+    ranked = corpus.search(vector, k=RERANK_CANDIDATES * 4)
+    seen_stories = set()
+    candidates = []
+    for meta, score in ranked:
+        story_id = meta.get("story_id")
+        if story_id in seen_stories:
+            continue
+        seen_stories.add(story_id)
+        candidates.append((meta, score))
+        if len(candidates) == RERANK_CANDIDATES:
+            break
+
+    if not candidates:
+        return {"results": [], "error": "No matching discussions found."}
+
+    # Rerank the shortlist with Gemma. If it returns nothing usable, fall through
+    # to cosine order rather than failing the search.
+    picks = []
+    try:
+        completion = llm.create_chat_completion(
+            messages=[{"role": "user",
+                       "content": _build_rerank_prompt(query, candidates, request.limit)}],
+            temperature=0.1,
+            max_tokens=64,
+        )
+        reply = completion["choices"][0]["message"].get("content") or ""
+        reply = _GEMMA_THOUGHT_RE.sub("", reply)
+        picks = _parse_rerank_picks(reply, len(candidates), request.limit)
+    except Exception as error:
+        print(f"[search] rerank failed, using cosine order: {error}")
+
+    if not picks:
+        picks = list(range(min(request.limit, len(candidates))))
+
+    results = []
+    for index in picks:
+        meta, score = candidates[index]
+        results.append({**meta, "score": score})
+
+    return {"results": results}
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "corpus": corpus.status()}
 
 
 if __name__ == "__main__":

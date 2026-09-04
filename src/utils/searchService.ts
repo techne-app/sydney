@@ -1,3 +1,16 @@
+/**
+ * DEAD as of the sidecar search migration (issue #11) — no callers remain.
+ *
+ * This is the old in-webview pipeline: HN Firebase top-500 -> slice(0, 30) ->
+ * POST /story-tags/ for themes -> MiniLM embeds the query AND all 30 themes ->
+ * cosine. Embedding N things per query is exactly what capped N at 30.
+ *
+ * Search now runs in the Python sidecar over 30 days of pre-embedded threads:
+ * src/tauri-compat/searchClient.ts -> sidecar/corpus.py.
+ *
+ * Kept for migration reference rather than deleted; nothing imports it, so it
+ * tree-shakes out of the bundle. Delete once the sidecar path is proven.
+ */
 import { MessageType, NewSearchRequest } from '../types/messages';
 import { fetchStoryTags } from './tag-utils';
 import { logger } from './logger';
