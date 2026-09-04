@@ -9,5 +9,9 @@ dependencies = [
     # >=0.3.35: earlier builds bundle a llama.cpp that rejects Gemma 4 with
     # "unknown model architecture: 'gemma4'".
     "llama-cpp-python>=0.3.35",
+    # Fetches the 30-day thread corpus (see corpus.py). Note for the Nuitka
+    # build: httpx pulls certifi, whose cacert.pem is a data file Nuitka does
+    # not bundle by default — TLS then fails only in the compiled binary.
+    "httpx",
     "nuitka>=4.0.7",
 ]

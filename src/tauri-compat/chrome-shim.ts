@@ -5,19 +5,21 @@
  * In Tauri there is no background script — this shim replaces chrome.runtime so
  * existing popup components don't crash.
  *
- * - onMessage.addListener / removeListener → tracks listeners so TAG_MATCH_RESPONSE can be dispatched
+ * - onMessage.addListener / removeListener → tracks listeners
  * - sendMessage(NEW_TAG)          → calls contextDb.storeTag() directly
  * - sendMessage(NEW_SEARCH)       → calls contextDb.storeSearch() directly
- * - sendMessage(TAG_MATCH_REQUEST)→ runs embed_tags + cosine similarity, dispatches TAG_MATCH_RESPONSE
  *
  * Installed in entry.tsx before React renders.
  */
 
 import { contextDb } from '../background/contextDb';
-import { embed_tags } from './embed';
-import { computeTensorSimilarity } from '../background/personalize';
 import { MessageType } from '../types/messages';
-import * as ort from 'onnxruntime-web';
+// OLD — only the removed TAG_MATCH_REQUEST handler used these. Leaving them
+// imported would keep transformers.js and onnxruntime-web in the webview bundle
+// for no reason, which is most of the point of moving search to the sidecar.
+// import { embed_tags } from './embed';
+// import { computeTensorSimilarity } from '../background/personalize';
+// import * as ort from 'onnxruntime-web';
 
 // Track registered message listeners so responses can be dispatched back to callers
 const messageListeners: ((message: any) => void)[] = [];
@@ -148,68 +150,53 @@ document.addEventListener('click', (e) => {
           .catch((err: any) => console.debug('[chrome-shim] storeSearch failed', err));
       }
 
-      if (msg.type === MessageType.TAG_MATCH_REQUEST && msg.data) {
-        // Run same logic as background/index.ts registerTagMatchingListener
-        // but directly in the Tauri webview (embed.js has no Chrome APIs)
-        (async () => {
-          try {
-            const { inputText, tags } = msg.data;
-
-            if (!inputText || !tags || tags.length === 0) {
-              dispatchMessage({
-                type: MessageType.TAG_MATCH_RESPONSE,
-                data: { matches: [], error: 'Invalid input or no tags available' },
-              });
-              return;
-            }
-
-            // Compute embedding for the query
-            const inputEmbedding = await embed_tags([inputText]);
-
-            // Compute embeddings for all tags
-            const tagTexts = tags.map((t: { tag: string }) => t.tag);
-            const tagEmbeddings = await embed_tags(tagTexts);
-
-            // Compute cosine similarity for each tag
-            const matches = [];
-            for (let i = 0; i < tagTexts.length; i++) {
-              const inputTensor = new ort.Tensor(
-                'float32',
-                new Float32Array(inputEmbedding[0].data),
-                inputEmbedding[0].dims
-              );
-              const tagTensor = new ort.Tensor(
-                'float32',
-                new Float32Array(tagEmbeddings[i].data),
-                tagEmbeddings[i].dims
-              );
-              const similarity = await computeTensorSimilarity(inputTensor, tagTensor);
-              matches.push({
-                tag: tags[i].tag,
-                type: tags[i].type,
-                anchor: tags[i].anchor,
-                score: similarity,
-              });
-            }
-
-            // Sort by score descending, return top 3 (same as background script)
-            const topMatches = matches
-              .sort((a, b) => b.score - a.score)
-              .slice(0, 3);
-
-            dispatchMessage({
-              type: MessageType.TAG_MATCH_RESPONSE,
-              data: { matches: topMatches },
-            });
-          } catch (err) {
-            console.debug('[chrome-shim] TAG_MATCH_REQUEST failed:', err);
-            dispatchMessage({
-              type: MessageType.TAG_MATCH_RESPONSE,
-              data: { matches: [], error: String(err) },
-            });
-          }
-        })();
-      }
+      /* --- OLD in-webview semantic matching (MiniLM + cosine over ~30 themes).
+       * Search now runs in the Python sidecar over 30 days of pre-embedded
+       * threads — see src/tauri-compat/searchClient.ts and sidecar/corpus.py.
+       * This was the sole consumer of embed_tags/computeTensorSimilarity in the
+       * Tauri build, so with it gone the webview loads no ML model at all.
+       * (The Chrome extension build still uses them via background/index.ts for
+       * RANK_TAGS — do not delete embed.js or personalize.ts.)
+       * Kept for migration reference; delete once the sidecar path is proven.
+       *
+       * if (msg.type === MessageType.TAG_MATCH_REQUEST && msg.data) {
+       *   (async () => {
+       *     try {
+       *       const { inputText, tags } = msg.data;
+       *       if (!inputText || !tags || tags.length === 0) {
+       *         dispatchMessage({
+       *           type: MessageType.TAG_MATCH_RESPONSE,
+       *           data: { matches: [], error: 'Invalid input or no tags available' },
+       *         });
+       *         return;
+       *       }
+       *       const inputEmbedding = await embed_tags([inputText]);
+       *       const tagTexts = tags.map((t: { tag: string }) => t.tag);
+       *       const tagEmbeddings = await embed_tags(tagTexts);
+       *       const matches = [];
+       *       for (let i = 0; i < tagTexts.length; i++) {
+       *         const inputTensor = new ort.Tensor('float32',
+       *           new Float32Array(inputEmbedding[0].data), inputEmbedding[0].dims);
+       *         const tagTensor = new ort.Tensor('float32',
+       *           new Float32Array(tagEmbeddings[i].data), tagEmbeddings[i].dims);
+       *         const similarity = await computeTensorSimilarity(inputTensor, tagTensor);
+       *         matches.push({ tag: tags[i].tag, type: tags[i].type,
+       *                        anchor: tags[i].anchor, score: similarity });
+       *       }
+       *       const topMatches = matches.sort((a, b) => b.score - a.score).slice(0, 3);
+       *       dispatchMessage({
+       *         type: MessageType.TAG_MATCH_RESPONSE, data: { matches: topMatches },
+       *       });
+       *     } catch (err) {
+       *       console.debug('[chrome-shim] TAG_MATCH_REQUEST failed:', err);
+       *       dispatchMessage({
+       *         type: MessageType.TAG_MATCH_RESPONSE,
+       *         data: { matches: [], error: String(err) },
+       *       });
+       *     }
+       *   })();
+       * }
+       */
     },
   },
 };
