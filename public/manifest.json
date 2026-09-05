@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Techne – Personalized insights from Hacker News",
-  "version": "1.8.48",
+  "version": "1.8.49",
   "description": "Understand nuanced tech discussions. Discover relevant conversations based on context, not just keywords.",
   "permissions": [
     "tabs"
