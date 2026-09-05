@@ -86,37 +86,6 @@ class Message(BaseModel):
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
 
-class ChatRequest(BaseModel):
-    messages: List[Message]
-
-class ChatResponse(BaseModel):
-    reply: str
-
-
-@app.post("/chat")
-def chat(request: ChatRequest):
-    # Convert messages to the format llama-cpp expects
-    messages = [{"role": m.role, "content": m.content} for m in request.messages]
-
-    # Qwen3: disable thinking mode via /no_think in the system prompt
-    # This prevents <think>...</think> blocks and keeps responses clean/fast
-    if messages and messages[0]["role"] == "system":
-        messages[0]["content"] = "/no_think\n" + messages[0]["content"]
-    else:
-        messages = [{"role": "system", "content": "/no_think"}] + messages
-
-    response = llm.create_chat_completion(
-        messages=messages,
-        temperature=0.7,
-        max_tokens=1024,
-    )
-
-    reply = response["choices"][0]["message"]["content"]
-    reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL).strip()
-
-    return ChatResponse(reply=reply)
-
-
 # ---------------------------------------------------------------------------
 # /route — LLM-native intent routing (replaces the manual IntentDetector).
 # Feeds the conversation + tool schemas to Qwen and returns EITHER a tool call

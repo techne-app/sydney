@@ -3,8 +3,6 @@ import { searchClient, SearchHit } from '../../tauri-compat/searchClient';
 import { MessageType } from '../../types/messages';
 import { ConversationManager } from '../conversationUtils';
 import { logger } from '../logger';
-// OLD in-webview search pipeline — kept for migration reference (delete later):
-// import { SearchService } from '../searchService';
 
 /**
  * Render hits the way formatSearchResultsAsMessage did. The UI contract is just
@@ -110,28 +108,6 @@ export class SearchTool implements Tool {
         success: true,
         data: { keyword_filter: input.keyword_filter, results: response.results }
       };
-
-      /* --- OLD in-webview search path (HN Firebase top-30 -> /story-tags/ ->
-       * MiniLM embed -> cosine). Superseded by the sidecar's /search above.
-       * Kept for migration reference; delete once this is proven.
-       *
-       * await SearchService.executeSearchStreaming(input.keyword_filter, async (content) => {
-       *   try {
-       *     logger.debug('SearchTool received content update:', content.substring(0, 50) + '...');
-       *     if (context.onProgress) {
-       *       await context.onProgress(content);
-       *     }
-       *     await ConversationManager.updateMessage(
-       *       pureContext.conversationId,
-       *       pureContext.messageId,
-       *       content
-       *     );
-       *     logger.database('SearchTool database updated with content');
-       *   } catch (error) {
-       *     logger.error('Error in SearchTool streaming callback:', error);
-       *   }
-       * });
-       */
 
     } catch (error) {
       logger.error('SearchTool execution failed:', error);
