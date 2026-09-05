@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { type ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 import { Conversation, ChatMessage, MODEL_OPTIONS, ThreadCardData } from '../../types/chat';
 import { ConversationManager } from '../../utils/conversationUtils';
-import { webLLMClient } from '../../utils/webLLMClient';
 import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
 import { ToolOrchestrator } from '../../utils/tools';
@@ -87,7 +85,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   // Helper function to handle tool execution using new AsyncGenerator pattern
   const handleToolExecution = async (
-    // OLD: userMessage: string,  (replaced by full history so /route has context)
     routeMessages: { role: string; content: string }[],
     workingConversation: Conversation,
     assistantMessage: ChatMessage
@@ -100,7 +97,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       };
 
       // Route via the sidecar; stream progress events
-      // OLD: for await (const progress of toolOrchestrator.executeTools(userMessage, context)) {
       for await (const progress of toolOrchestrator.executeTools(routeMessages, context)) {
         switch (progress.type) {
           case 'status':
@@ -159,18 +155,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
 
             return false; // Not handled → fall through to the chat path
-
-            /* OLD complete-case (pre-/route), kept for migration reference:
-            const wasToolCalled = progress.data?.wasToolCalled || (progress.data?.success !== undefined);
-            if (wasToolCalled) {
-              setStreamingMessage(prev => prev ? { ...prev, isStreaming: false } : null);
-              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-              if (finalConversation) { onConversationUpdated(finalConversation); }
-              setStreamingMessage(null);
-              return true;
-            }
-            return false;
-            */
           }
           case 'error':
             logger.error('Tool execution error:', progress.error);
@@ -341,9 +325,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setLoadedModelName(MODEL_OPTIONS.find(m => m.value === config.model)?.name || config.model);
 
       // Check if model is already loaded
-      const isModelLoaded = webLLMClient.isModelLoaded();
-      logger.model('Model loaded check:', isModelLoaded);
-      
       // Build conversation history for the router (includes the just-added user
       // message; the empty assistant streaming message is not yet in it).
       //
@@ -383,7 +364,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       // Route via the sidecar LLM first (tool call vs chat)
       logger.model('Routing message via sidecar /route...');
-      // OLD: const toolWasCalled = await handleToolExecution(userMessage, workingConversation, assistantMessage);
       const toolWasCalled = await handleToolExecution(routeMessages, workingConversation, assistantMessage);
       
       // /route is the only path to the model now. It always returns either a
@@ -415,40 +395,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       logger.debug('Route handled the turn');
       return;
-
-      /* --- OLD fallback to the tool-less /chat endpoint. Kept for reference;
-       * delete once the single-path routing is proven.
-       *
-       * const chatHistory: ChatCompletionMessageParam[] = conversationForHistory?.messages.map(msg => ({
-       *   role: msg.role as 'user' | 'assistant',
-       *   content: msg.content
-       * })) || [];
-       *
-       * try {
-       *   await webLLMClient.chat({
-       *     messages: chatHistory,
-       *     config: { model: config.model, temperature: config.temperature,
-       *               topP: config.topP, maxTokens: config.maxTokens, stream: true },
-       *     onUpdate: (message) => {
-       *       setStreamingMessage(prev => prev ? { ...prev, content: message } : null);
-       *     },
-       *     onFinish: async (message) => {
-       *       await ConversationManager.updateMessage(workingConversation.id, assistantMessage.id, message);
-       *       const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-       *       if (finalConversation) { onConversationUpdated(finalConversation); }
-       *       setStreamingMessage(null);
-       *     },
-       *     onError: (errorMessage) => {
-       *       logger.error('WebLLM chat error:', errorMessage);
-       *       setError(getUserFriendlyErrorMessage(errorMessage));
-       *       setStreamingMessage(null);
-       *     }
-       *   });
-       * } catch (error) {
-       *   logger.error('WebLLM chat failed:', error);
-       *   setError('Chat failed to start');
-       * }
-       */
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to get response');
       logger.error('Error during chat:', err);
