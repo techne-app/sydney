@@ -41,7 +41,8 @@
     ],
     "resources": {
       "../sidecar/models/google_gemma-4-26B-A4B-it-Q3_K_M.gguf": "models/google_gemma-4-26B-A4B-it-Q3_K_M.gguf",
-      "../sidecar/models/nomic-embed-text-v1.5.Q8_0.gguf": "models/nomic-embed-text-v1.5.Q8_0.gguf"
+      "../sidecar/models/nomic-embed-text-v1.5.Q8_0.gguf": "models/nomic-embed-text-v1.5.Q8_0.gguf",
+      "../sidecar/llama/": "llama/"
     }
   }
 }

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from llama_cpp import Llama
+import httpx
 import os
 import re
 import json
@@ -40,35 +41,73 @@ def resolve_model(name: str) -> str:
     return bundled if os.path.exists(bundled) else local
 
 
-MODEL_NAME = "google_gemma-4-26B-A4B-it-Q3_K_M.gguf"  # was Qwen3-4B-Q4_K_M.gguf
-MODEL_PATH = resolve_model(MODEL_NAME)
-# The embedding model MUST be the one that produced the stored vectors —
-# nomic-embed-text-v1.5, 768-dim (techne-pipeline/scripts/start_embedding_server.sh).
-# A query embedded by any other model lands in a different vector space, and
-# cosine against it returns noise rather than weak matches.
+# Gemma is served by llama-server, not loaded in-process. It has to be: only
+# llama-server's --jinja applies the model's own chat template and returns tool
+# calls as a structured `tool_calls` field. llama-cpp-python hands back the raw
+# `<|tool_call>call:...` text, which is why this file used to carry a
+# hand-written parser for Gemma's syntax.
+#
+# Note this cannot be a partial move — 12GB in-process plus 12GB in llama-server
+# does not fit in 24GB of RAM.
+LLAMA_SERVER_URL = os.environ.get("TECHNE_LLAMA_SERVER", "http://127.0.0.1:8081")
+LLAMA_TIMEOUT = 300.0
+
+# nomic stays in-process. Only the chat model needs --jinja (tool calling), and
+# nomic is 139MB on CPU embedding one short query per search — running a second
+# server for that would add a process and a failure mode for no gain.
+#
+# It MUST be the model that produced the stored vectors — nomic-embed-text-v1.5,
+# 768-dim (techne-pipeline/scripts/start_embedding_server.sh). A query embedded
+# by any other model lands in a different vector space, and cosine against it
+# returns noise rather than weak matches.
 EMBED_MODEL_NAME = "nomic-embed-text-v1.5.Q8_0.gguf"
 EMBED_MODEL_PATH = resolve_model(EMBED_MODEL_NAME)
 
-print(f"Loading model from {MODEL_PATH}...")
-llm = Llama(
-    model_path=MODEL_PATH,
-    n_gpu_layers=-1,   # -1 = offload all layers to Metal GPU
-    n_ctx=8192,        # 100 rerank candidates run ~3k tokens; 4096 was too tight
-    verbose=False,
-)
-print("Model loaded.")
-
-# CPU-only on purpose: the pipeline runs its embedder with -ngl 0 to keep the
-# Metal context free for the chat model, and that matters more here with 12GB of
-# Gemma already on the GPU. Embedding one short query per search is cheap on CPU.
 print(f"Loading embedding model from {EMBED_MODEL_PATH}...")
 embedder = Llama(
     model_path=EMBED_MODEL_PATH,
     embedding=True,
-    n_gpu_layers=0,
+    n_gpu_layers=0,   # CPU: keeps the Metal context free for llama-server's Gemma
     verbose=False,
 )
 print("Embedding model loaded.")
+
+
+def chat_completion(messages: List[Dict[str, Any]], **kwargs: Any) -> Dict[str, Any]:
+    """Call Gemma on llama-server (OpenAI-compatible /v1/chat/completions).
+
+    Replaces llm.create_chat_completion(). Returns the raw `message` object, so
+    callers read `tool_calls` and `content` the same way they did before.
+
+    Thinking is disabled. Gemma's chain-of-thought is billed against the same
+    max_tokens as the answer, and it will happily spend the whole budget
+    reasoning and emit nothing — `finish_reason: "length"`, empty content. That
+    produced "Sorry, I didn't catch that" for any follow-up question, and left
+    the reranker (max_tokens=64) silently falling back to cosine order.
+
+    Neither call needs it: routing is a classification, reranking is picking
+    three numbers. It also costs ~500 tokens at 28 tok/s — around 18 seconds of
+    latency for nothing.
+
+    Callers can pass chat_template_kwargs to override.
+    """
+    payload = {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "messages": messages,
+        **kwargs,
+    }
+    with httpx.Client(timeout=LLAMA_TIMEOUT) as client:
+        response = client.post(f"{LLAMA_SERVER_URL}/v1/chat/completions", json=payload)
+        response.raise_for_status()
+    return response.json()["choices"][0]["message"]
+
+
+def llama_server_ready() -> bool:
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            return client.get(f"{LLAMA_SERVER_URL}/health").status_code == 200
+    except Exception:
+        return False
 
 # Start syncing the 30-day thread corpus in the background. Non-blocking: this
 # runs while Gemma loads, so the ~44s download costs the user nothing.
@@ -134,61 +173,6 @@ def _build_route_system_prompt(pinned: Optional[Dict[str, Any]]) -> str:
     return instruction + context
 
 
-# Gemma 4 emits tool calls in its own non-JSON syntax, straight from the chat
-# template baked into the GGUF:
-#     <|tool_call>call:search_threads{keyword_filter:<|"|>rust<|"|>}<tool_call|>
-# Note the delimiters are NOT a matched pair, and string values are wrapped in
-# <|"|> rather than quotes. The closing marker is optional here so a reply cut
-# off by max_tokens still yields the call.
-_GEMMA_CALL_RE = re.compile(
-    r"<\|tool_call>call:([A-Za-z_]\w*)\s*\{(.*?)\}(?:<tool_call\|>|\s*$)", re.DOTALL
-)
-# key:<|"|>string<|"|>  or  key:bare_token  (numbers, booleans)
-_GEMMA_ARG_RE = re.compile(r"(\w+)\s*:\s*(?:<\|\"\|>(.*?)<\|\"\|>|([^,}]+))", re.DOTALL)
-
-# Gemma's thinking channel, which must not reach the user as a chat reply.
-_GEMMA_THOUGHT_RE = re.compile(r"<\|channel>thought.*?<channel\|>", re.DOTALL)
-
-
-def _parse_gemma_args(body: str) -> Dict[str, Any]:
-    args: Dict[str, Any] = {}
-    for key, quoted, bare in _GEMMA_ARG_RE.findall(body):
-        if quoted:
-            args[key] = quoted
-        elif bare.strip():
-            raw = bare.strip()
-            try:
-                args[key] = json.loads(raw)  # numbers, true/false, null
-            except json.JSONDecodeError:
-                args[key] = raw
-    return args
-
-
-def _extract_tool_calls(content: str) -> List[Dict[str, Any]]:
-    """Parse tool-call markers out of the reply text.
-
-    llama-cpp-python doesn't parse either model's tool-call format for us, so we
-    do it here. Handles Gemma 4's <|tool_call>call:name{...} syntax and Qwen's
-    <tool_call>{json}</tool_call>, so swapping the model back doesn't break
-    routing. Malformed blocks are skipped rather than fatal — /route falls
-    through to chat, which is the safer failure.
-    """
-    calls: List[Dict[str, Any]] = []
-
-    for name, body in _GEMMA_CALL_RE.findall(content):
-        calls.append({"name": name, "arguments": _parse_gemma_args(body)})
-
-    for block in re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", content, re.DOTALL):
-        try:
-            parsed = json.loads(block)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict) and parsed.get("name"):
-            calls.append(parsed)
-
-    return calls
-
-
 def _as_tool_call(name: str, arguments: Any) -> Dict[str, Any]:
     if isinstance(arguments, str):
         try:
@@ -217,17 +201,15 @@ def route(request: RouteRequest):
     messages = [{"role": "system", "content": _build_route_system_prompt(request.pinned_thread)}]
     messages += [_to_chat_message(m) for m in request.messages]
 
-    # Native model template (no chat_format override) — it supports `tools`.
-    # The generic chatml-function-calling handler is deliberately avoided: it
-    # forces a tool call on every message, including "hello".
-    response = llm.create_chat_completion(
+    # llama-server --jinja applies Gemma's own chat template and returns tool
+    # calls as a structured `tool_calls` field, so there is nothing to parse.
+    msg = chat_completion(
         messages=messages,
         tools=TOOLS,
         tool_choice="auto",
         temperature=0.1,   # low = consistent routing / structured output
         max_tokens=512,
     )
-    msg = response["choices"][0]["message"]
 
     def _usable(name: str) -> bool:
         """Reject calls that cannot succeed given the current context.
@@ -247,37 +229,24 @@ def route(request: RouteRequest):
             return False
         return name in TOOL_NAMES
 
-    # 1. Belt-and-suspenders: if a library version parsed tool_calls, trust it.
     for tc in (msg.get("tool_calls") or []):
         fn = tc.get("function", {})
         if _usable(fn.get("name")):
             return _as_tool_call(fn["name"], fn.get("arguments"))
 
-    content = msg.get("content") or ""
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)      # Qwen
-    content = _GEMMA_THOUGHT_RE.sub("", content).strip()                       # Gemma
+    # No tool call -> conversational reply. Gemma's reasoning arrives in a
+    # separate `reasoning_content` field, so `content` needs no cleaning.
+    reply = (msg.get("content") or "").strip()
 
-    # 2. Parse the model's tool-call markers ourselves; take the first known tool.
-    for call in _extract_tool_calls(content):
-        if _usable(call["name"]):
-            return _as_tool_call(call["name"], call.get("arguments"))
-
-    # 3. No tool call -> conversational reply (strip any stray markers).
-    reply = _GEMMA_CALL_RE.sub("", content)
-    reply = re.sub(r"<tool_call>.*?</tool_call>", "", reply, flags=re.DOTALL).strip()
-
-    # Stripping a suppressed tool call can leave nothing behind — the whole
-    # reply was the marker. Ask again without tools so the model has to answer
-    # in words rather than reaching for a tool it cannot use.
+    # A suppressed tool call leaves content empty — the whole reply WAS the
+    # call. Ask again without tools so the model has to answer in words.
     if not reply:
-        retry = llm.create_chat_completion(
+        retry = chat_completion(
             messages=messages,
             temperature=0.7,
             max_tokens=512,
         )
-        retry_content = retry["choices"][0]["message"].get("content") or ""
-        retry_content = _GEMMA_THOUGHT_RE.sub("", retry_content)
-        reply = _GEMMA_CALL_RE.sub("", retry_content).strip()
+        reply = (retry.get("content") or "").strip()
 
     # The retry can come back empty too. /route is now the only path to the
     # model — there's no /chat fallback behind it — so an empty reply would
@@ -319,7 +288,7 @@ def _parse_rerank_picks(text: str, count: int, limit: int):
     """Pull the chosen indices out of the model's reply.
 
     Deliberately just scrapes integers rather than asking for JSON or a tool
-    call — Gemma's structured output is quirky enough (see _extract_tool_calls),
+    call — a bare list of numbers is the one format that is hard to get wrong,
     and a bare list of numbers is the one format it is hard to get wrong. Any
     out-of-range or duplicate number is dropped; if nothing usable comes back
     the caller falls back to plain cosine order.
@@ -378,15 +347,13 @@ def search(request: SearchRequest):
     # to cosine order rather than failing the search.
     picks = []
     try:
-        completion = llm.create_chat_completion(
+        completion = chat_completion(
             messages=[{"role": "user",
                        "content": _build_rerank_prompt(query, candidates, request.limit)}],
             temperature=0.1,
             max_tokens=64,
         )
-        reply = completion["choices"][0]["message"].get("content") or ""
-        reply = _GEMMA_THOUGHT_RE.sub("", reply)
-        picks = _parse_rerank_picks(reply, len(candidates), request.limit)
+        picks = _parse_rerank_picks(completion.get("content") or "", len(candidates), request.limit)
     except Exception as error:
         print(f"[search] rerank failed, using cosine order: {error}")
 
@@ -403,7 +370,14 @@ def search(request: SearchRequest):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "corpus": corpus.status()}
+    # llama_server is reported separately because the sidecar starts fine
+    # without it and only fails when a request needs Gemma. Surfacing it here
+    # makes "the model server isn't up" diagnosable instead of a 500 later.
+    return {
+        "status": "ok",
+        "llama_server": llama_server_ready(),
+        "corpus": corpus.status(),
+    }
 
 
 if __name__ == "__main__":

@@ -11,7 +11,10 @@ dist/
 
 # Test coverage reports
 coverage/
+
+# Binaries fetched or built locally, not committed
 models/
+sidecar/llama/
 
 # Tauri build outputs
 dist-tauri/
