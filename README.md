@@ -73,18 +73,37 @@ updating both — the bundle names files explicitly so a leftover GGUF in
 
 ## Dev Mode
 
-Run the Python sidecar directly from source — no compilation needed, fast iteration.
+Run the model server and Python sidecar from source — no compilation needed,
+fast iteration. In production Tauri starts both for you; in dev you start them
+by hand.
 
-Open two terminal windows:
+Open three terminal windows:
 
-**Terminal 1 — Start the AI sidecar**
+**Terminal 1 — Start the model server**
+```bash
+./sidecar/llama/llama-server \
+  -m sidecar/models/google_gemma-4-26B-A4B-it-Q3_K_M.gguf \
+  --jinja \
+  -ngl 99 -c 8192 \
+  --host 127.0.0.1 --port 8081
+```
+`--jinja` is not optional. It applies Gemma's own chat template so tool calls
+come back as a structured `tool_calls` field. Without it they arrive as raw
+`<|tool_call>` text, the sidecar sees no tool call, and search and summarize
+silently stop working while chat still looks fine.
+
+Takes a minute or two to load 12GB. Ready when `curl 127.0.0.1:8081/health`
+returns OK.
+
+**Terminal 2 — Start the Python sidecar**
 ```bash
 cd sidecar
 uv run main.py
 ```
-Wait until you see `Model loaded.`
+Starts in seconds — it only loads nomic (139MB). Gemma lives in llama-server.
+`curl localhost:8000/health` reports `llama_server: true` once both are up.
 
-**Terminal 2 — Start the app**
+**Terminal 3 — Start the app**
 ```bash
 npm run tauri:dev
 ```
@@ -93,14 +112,33 @@ npm run tauri:dev
 
 Creates a standalone `.dmg` installer that bundles the app, sidecar binary, and AI model.
 
-**Step 8 — Compile the Python sidecar with Nuitka** *(one-time, unless you change `main.py`)*
+**Step 8 — Compile the Python sidecar with Nuitka** *(rerun after **any** change under `sidecar/`)*
 ```bash
 cd sidecar
-uv run python -m nuitka --onefile --output-filename=sidecar-aarch64-apple-darwin main.py
+uv run python -m nuitka --onefile \
+  --output-filename=sidecar-aarch64-apple-darwin \
+  --include-package-data=certifi \
+  --include-package-data=llama_cpp \
+  --assume-yes-for-downloads \
+  main.py
 mkdir -p ../src-tauri/binaries
 mv sidecar-aarch64-apple-darwin ../src-tauri/binaries/
 cd ..
 ```
+
+The two `--include-package-data` flags matter, and both fail *only* in the
+compiled binary — never in `uv run`, so dev proves nothing here:
+
+- **certifi** ships `cacert.pem`, the trusted-CA list Python needs to verify
+  HTTPS. Without it the corpus fetch from `techne.app` fails and search quietly
+  returns nothing.
+- **llama_cpp** ships the compiled library and Metal shaders. Without them the
+  models don't load at all.
+
+Nothing automates this step, so a stale binary is easy to ship: the `.app` runs
+whatever `main.py` was compiled last, not what's in the working tree. **Always
+run the compiled binary directly** (`./src-tauri/binaries/sidecar-aarch64-apple-darwin`)
+and check search works before building the dmg.
 
 **Step 9 — Grant Automation permission** *(one-time setup)*
 
