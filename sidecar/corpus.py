@@ -41,6 +41,16 @@ CACHE_DIR = os.path.expanduser(
 VECTORS_FILE = os.path.join(CACHE_DIR, "vectors.npy")
 META_FILE = os.path.join(CACHE_DIR, "meta.json")
 
+# Fields every cached row must carry. Add to this when the endpoint starts
+# returning a new one: a delta fetch only brings NEW rows, so rows already on
+# disk would never gain the field and would stay silently incomplete forever.
+# A mismatch discards the cache and refetches the window.
+#
+# Only list a field the endpoint actually returns. Naming one it doesn't send
+# rejects the cache on every start, refetches, saves a cache still lacking the
+# field, and rejects it again — a full re-download on every launch, forever.
+REQUIRED_FIELDS = ("thread_id", "story_title", "theme", "anchor", "time", "summary")
+
 _lock = threading.Lock()
 _vectors: Optional[np.ndarray] = None   # (N, 768) float32, L2-normalized
 _meta: List[Dict[str, Any]] = []        # parallel to _vectors, same order
@@ -162,7 +172,8 @@ def merge(rows: List[Dict[str, Any]]) -> int:
             except (ValueError, KeyError):
                 continue  # a malformed row is not worth failing the whole merge
             meta = {k: row[k] for k in
-                    ("thread_id", "story_id", "story_title", "theme", "category", "anchor", "time")
+                    ("thread_id", "story_id", "story_title", "theme", "category",
+                     "anchor", "time", "summary")
                     if k in row}
             entries[meta["thread_id"]] = (meta, vec)
 
@@ -179,6 +190,22 @@ def newest_time() -> Optional[int]:
         return None
     newest = max(_parse_time(m["time"]) for m in _meta)
     return int(newest.timestamp())
+
+
+def get(thread_id: int) -> Optional[Dict[str, Any]]:
+    """Look up one thread by id.
+
+    A plain dict lookup rather than a network call: the whole 30-day window is
+    already in memory, so fetching a thread the user asked about costs nothing
+    and works offline. This is why `summary` is worth carrying in the corpus
+    payload — without it this returns metadata the model already had from
+    search, and answering "what's that one about?" would need a round-trip.
+    """
+    with _lock:
+        for meta in _meta:
+            if meta.get("thread_id") == thread_id:
+                return dict(meta)
+    return None
 
 
 def search(query_vec: np.ndarray, k: int = 100) -> List[Tuple[Dict[str, Any], float]]:
@@ -206,6 +233,11 @@ def _load_cache() -> bool:
             meta = json.load(handle)
 
         if len(meta) != matrix.shape[0] or matrix.shape[1] != EMBEDDING_DIMS:
+            return False
+
+        missing = [f for f in REQUIRED_FIELDS if f not in (meta[0] if meta else {})]
+        if missing:
+            print(f"[corpus] cache is missing {missing}; refetching full window")
             return False
 
         # Reject a cache that doesn't span the window. Startup only ever does a
