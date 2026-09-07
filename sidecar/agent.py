@@ -10,9 +10,10 @@ drives that loop; the tools below are plain Python functions, and ADK builds
 their schemas from the signature and docstring. Nothing hand-written.
 """
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from google.adk.agents import LlmAgent
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
@@ -33,12 +34,69 @@ USER_ID = "local"
 DB_DIR = os.path.expanduser("~/Library/Application Support/com.technesystems.techne")
 DB_PATH = os.path.join(DB_DIR, "sessions.db")
 
-INSTRUCTION = (
+BASE_INSTRUCTION = (
     "You help a user explore Hacker News. Use search_threads to find "
     "discussions on a topic. Answer from what the tools return — do not invent "
     "discussions, titles, or links. If you do not have enough information to "
     "answer, say so plainly rather than guessing."
 )
+
+# The thread the user has dragged into the chat, and whether it is still open.
+#
+# Two keys, not one, because pinning is both an event and a context. Clearing
+# the thread on unpin looked tidier but broke the transcript: the model would
+# read its own earlier answer about a thread, find no trace of it in the prompt,
+# and conclude it had hallucinated — retracting a correct answer and telling the
+# user it had made things up. A model's past statements have to stay explicable
+# from what it can currently see, so a closed thread stays visible and is marked
+# closed rather than deleted.
+PINNED_KEY = "pinned_thread"
+PINNED_ACTIVE_KEY = "pinned_active"
+
+
+def _describe(thread: Dict[str, Any]) -> str:
+    return (
+        f"- Title: {thread.get('story_title', '')}\n"
+        f"- Theme: {thread.get('theme', '')}\n"
+        f"- Category: {thread.get('category', '')}\n"
+        f"- Comments: {thread.get('comment_count', '')}\n"
+        f"- Summary: {thread.get('summary', '')}\n"
+    )
+
+
+def _instruction(context: ReadonlyContext) -> str:
+    """Build the system prompt from current session state.
+
+    Note there is no summarize_pinned_thread tool. Summarizing what the user is
+    already looking at is not a capability the agent needs — the summary is
+    right here in the prompt, so the model simply answers. That tool only ever
+    existed because the old frontend had to be told which action to run.
+    """
+    state = context.state or {}
+    thread = state.get(PINNED_KEY)
+
+    if not thread:
+        return BASE_INSTRUCTION + "\n\nThe user has no discussion open right now."
+
+    if state.get(PINNED_ACTIVE_KEY):
+        return BASE_INSTRUCTION + (
+            "\n\nThe user currently has this discussion open:\n"
+            + _describe(thread)
+            + "When they say \"this thread\", \"this discussion\", \"this\", or "
+            "\"this one\", they mean the open discussion above — not an item "
+            "from a list of search results. If they mean a search result they "
+            "will name it or give its number. Answer from the summary above; "
+            "there is no need to search for it."
+        )
+
+    # Closed, but kept so earlier turns still make sense.
+    return BASE_INSTRUCTION + (
+        "\n\nEarlier in this conversation the user had this discussion open:\n"
+        + _describe(thread)
+        + "They have since closed it. Anything you said about it earlier was "
+        "correct and based on this summary — do not treat it as invented. "
+        "\"This\" no longer refers to it, so ask which discussion they mean."
+    )
 
 
 def search_threads(keyword_filter: str) -> Dict[str, Any]:
@@ -65,7 +123,7 @@ _agent = LlmAgent(
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     ),
     name=APP_NAME,
-    instruction=INSTRUCTION,
+    instruction=_instruction,
     tools=[search_threads],
 )
 
@@ -87,12 +145,22 @@ def start() -> None:
     print(f"[agent] sessions at {DB_PATH}")
 
 
-async def send(session_id: str, message: str) -> Dict[str, Any]:
-    """Run one turn. Returns the final reply plus the tool calls it made.
+async def send(
+    session_id: str,
+    message: str,
+    pinned_thread: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Run one turn.
 
     session_id is the frontend's conversation id, so a Dexie conversation and an
     ADK session are the same thing seen from two sides — the UI store holds
     rendered prose, the agent store holds the structure it reasons over.
+
+    Returns the reply, the tool calls made, and the raw results those tools
+    produced. The frontend renders links from `results` rather than from the
+    model's prose: the model retypes a 50-character URL every time it writes a
+    list, and one wrong character is a dead link nobody notices until it's
+    clicked.
     """
     if _runner is None or _session_service is None:
         raise RuntimeError("agent not started — call start() first")
@@ -105,25 +173,41 @@ async def send(session_id: str, message: str) -> Dict[str, Any]:
             app_name=APP_NAME, user_id=USER_ID, session_id=session_id
         )
 
+    # Record what the user has open. On unpin the thread is kept and flagged
+    # closed rather than deleted — see the note on PINNED_KEY. Only overwrite
+    # the thread itself when one is open, so closing does not erase which one
+    # it was.
+    state_delta: Dict[str, Any] = {PINNED_ACTIVE_KEY: pinned_thread is not None}
+    if pinned_thread is not None:
+        state_delta[PINNED_KEY] = pinned_thread
+
     reply_parts: list[str] = []
     tool_calls: list[Dict[str, Any]] = []
+    results: list[Dict[str, Any]] = []
 
     async for event in _runner.run_async(
         user_id=USER_ID,
         session_id=session.id,
         new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        state_delta=state_delta,
     ):
         if not (event.content and event.content.parts):
             continue
         for part in event.content.parts:
             call = getattr(part, "function_call", None)
+            response = getattr(part, "function_response", None)
             if call:
                 tool_calls.append({"name": call.name, "arguments": dict(call.args or {})})
+            elif response:
+                # Keep the structured output so the UI can render it directly.
+                payload = response.response
+                if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                    results.extend(payload["results"])
             elif getattr(part, "text", None):
                 reply_parts.append(part.text)
 
     # The model emits text at several points in the loop — a preamble before a
     # tool call, then the real answer. The last non-empty part is the answer;
-    # the earlier ones are it thinking out loud about what to fetch.
+    # the earlier ones are it narrating what it is about to fetch.
     reply = next((t.strip() for t in reversed(reply_parts) if t.strip()), "")
-    return {"reply": reply, "tool_calls": tool_calls}
+    return {"reply": reply, "tool_calls": tool_calls, "results": results}

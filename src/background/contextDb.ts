@@ -212,8 +212,7 @@ class ContextDB extends Dexie {
   async updateMessageInConversation(
     conversationId: string,
     messageId: string,
-    content: string,
-    extra?: Partial<ChatMessage>
+    content: string
   ): Promise<void> {
     const conversation = await this.conversations.get(conversationId);
     if (conversation) {
@@ -221,12 +220,6 @@ class ContextDB extends Dexie {
       if (messageIndex !== -1) {
         conversation.messages[messageIndex].content = content;
         conversation.messages[messageIndex].isStreaming = false;
-        // Tools attach their call + raw result here so /route can replay them
-        // with the proper roles. Messages are stored as JSON inside the
-        // conversation record, so new optional fields need no schema change.
-        if (extra) {
-          Object.assign(conversation.messages[messageIndex], extra);
-        }
         conversation.updatedAt = new Date();
         await this.conversations.put(conversation);
       }

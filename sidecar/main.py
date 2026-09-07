@@ -196,6 +196,9 @@ def search_endpoint(request: SearchRequest):
 
 class AgentMessage(BaseModel):
     message: str
+    # What the user currently has open, or null when nothing is. Goes into
+    # session state, not the prompt — see agent._instruction.
+    pinned_thread: Optional[Dict[str, Any]] = None
 
 
 @app.post("/sessions/{session_id}/messages")
@@ -203,7 +206,7 @@ async def send_message(session_id: str, body: AgentMessage):
     if not llama_server_ready():
         return {"reply": "", "error": "The model server is still starting up."}
     try:
-        return await agent.send(session_id, body.message)
+        return await agent.send(session_id, body.message, body.pinned_thread)
     except Exception as error:
         print(f"[agent] failed: {error}")
         return {"reply": "", "error": str(error)}

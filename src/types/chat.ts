@@ -4,16 +4,6 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   isStreaming?: boolean;
-  /**
-   * Set when this message is the rendered output of a tool rather than
-   * something the model wrote. Replayed to /route as a proper tool_calls +
-   * tool-role pair, so the model can tell the difference — without it, the
-   * model reads its own past tool output as prose it authored and writes an
-   * imitation (inventing threads and links) instead of calling the tool again.
-   */
-  toolCall?: { name: string; arguments: Record<string, any> };
-  /** Raw tool output as JSON, replayed in the tool-role message. */
-  toolResult?: string;
 }
 
 // ThreadCard data interface for pinned threads
