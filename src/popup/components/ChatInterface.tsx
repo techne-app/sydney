@@ -3,10 +3,9 @@ import { Conversation, ChatMessage, MODEL_OPTIONS, ThreadCardData } from '../../
 import { ConversationManager } from '../../utils/conversationUtils';
 import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
-import { ToolOrchestrator } from '../../utils/tools';
-import { ToolExecutionContext } from '../../utils/tools/toolExecution';
-import { RouteMessage } from '../../tauri-compat/routeClient';
+import { sessionClient, AgentResponse } from '../../tauri-compat/sessionClient';
 import { ThreadContextService } from '../../utils/ThreadContextService';
+import { MessageType } from '../../types/messages';
 import { logger } from '../../utils/logger';
 import { modelState } from '../../utils/modelState';
 import { Modal } from './Modal';
@@ -53,7 +52,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
   const [contextThreads, setContextThreads] = useState<ThreadCardData[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
-  const [toolOrchestrator] = useState(() => new ToolOrchestrator());
   const [pinnedCard, setPinnedCard] = useState<ThreadCardData | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -83,89 +81,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }, [activeConversation?.messages, streamingMessage]);
 
 
-  // Helper function to handle tool execution using new AsyncGenerator pattern
-  const handleToolExecution = async (
-    routeMessages: { role: string; content: string }[],
-    workingConversation: Conversation,
-    assistantMessage: ChatMessage
-  ): Promise<boolean> => {
-    try {
-      const context: ToolExecutionContext = {
-        conversationId: workingConversation.id,
-        messageId: assistantMessage.id,
-        pinnedThread: pinnedCard
-      };
-
-      // Route via the sidecar; stream progress events
-      for await (const progress of toolOrchestrator.executeTools(routeMessages, context)) {
-        switch (progress.type) {
-          case 'status':
-            // Status messages removed - no more temp status clutter
-            break;
-          case 'content':
-            // Update streaming message with content
-            setStreamingMessage(prev => prev ? {
-              ...prev,
-              content: progress.message || '',
-              isStreaming: true
-            } : null);
-            break;
-          case 'complete': {
-            const data = progress.data;
-            const toolRan = data?.wasToolCalled === true || data?.success !== undefined;
-            if (toolRan) {
-              // Tool wrote its content to the DB during execution; just finalize.
-              setStreamingMessage(prev => prev ? {
-                ...prev,
-                isStreaming: false
-              } : null);
-
-              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-              if (finalConversation) {
-                onConversationUpdated(finalConversation);
-              }
-
-              setStreamingMessage(null);
-              return true; // Tool handled the response
-            }
-
-            // Option A: /route returned a conversational reply — use it directly.
-            // If empty (e.g. /route failed), fall through to the plain chat path.
-            if (typeof data?.reply === 'string' && data.reply.trim().length > 0) {
-              const reply = data.reply;
-              setStreamingMessage(prev => prev ? {
-                ...prev,
-                content: reply,
-                isStreaming: false
-              } : null);
-
-              await ConversationManager.updateMessage(
-                workingConversation.id,
-                assistantMessage.id,
-                reply
-              );
-
-              const finalConversation = await ConversationManager.getConversation(workingConversation.id);
-              if (finalConversation) {
-                onConversationUpdated(finalConversation);
-              }
-
-              setStreamingMessage(null);
-              return true; // Chat reply handled by /route
-            }
-
-            return false; // Not handled → fall through to the chat path
-          }
-          case 'error':
-            logger.error('Tool execution error:', progress.error);
-            return false;
-        }
-      }
-    } catch (error) {
-      logger.error('Tool orchestration failed:', error);
-      return false;
+  /**
+   * Render the agent's answer.
+   *
+   * Links come from `results`, never from the model's prose. The model writes a
+   * natural reply but retypes long URLs when it lists threads, and one wrong
+   * character is a dead link nobody notices until it is clicked. So the reply
+   * supplies the words and the structured hits supply the links.
+   */
+  const formatAgentReply = (response: AgentResponse): string => {
+    const reply = (response.reply || '').trim();
+    const hits = response.results ?? [];
+    if (hits.length === 0) {
+      return reply || "I couldn't find anything for that.";
     }
-    return false;
+
+    const seen = new Set<number>();
+    const lines = hits
+      .filter(hit => !seen.has(hit.thread_id) && seen.add(hit.thread_id))
+      .map((hit, i) => `${i + 1}. [${hit.theme}](${hit.anchor}) — ${hit.story_title}`);
+
+    return `${reply}\n\n${lines.join('\n\n')}`;
   };
 
   // Reusable function to create new conversation (as draft)
@@ -324,76 +260,64 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       const config = await configStore.getConfig();
       setLoadedModelName(MODEL_OPTIONS.find(m => m.value === config.model)?.name || config.model);
 
-      // Check if model is already loaded
-      // Build conversation history for the router (includes the just-added user
-      // message; the empty assistant streaming message is not yet in it).
-      //
-      // A message a tool produced expands into three turns, so the model can
-      // tell tool output from its own prose. Replayed flat, it reads its past
-      // search results as something it wrote and answers the next search by
-      // imitating the format — inventing threads and links rather than calling
-      // the tool. See ChatMessage.toolCall.
-      const routeMessages: RouteMessage[] = [];
-      for (const m of conversationForHistory?.messages ?? []) {
-        if (m.role === 'assistant' && m.toolCall) {
-          const callId = `call_${m.id}`;
-          routeMessages.push({
-            role: 'assistant',
-            content: '',
-            tool_calls: [{
-              id: callId,
-              type: 'function',
-              function: {
-                name: m.toolCall.name,
-                arguments: JSON.stringify(m.toolCall.arguments ?? {}),
-              },
-            }],
-          });
-          routeMessages.push({
-            role: 'tool',
-            content: m.toolResult ?? '',
-            tool_call_id: callId,
-            name: m.toolCall.name,
-          });
-        }
-        routeMessages.push({ role: m.role, content: m.content });
-      }
-      if (routeMessages.length === 0) {
-        routeMessages.push({ role: 'user', content: userMessage });
-      }
+      // One call to the agent. It owns the tool loop and its own conversation
+      // history, so there is no history to rebuild here and no tool output to
+      // replay — that machinery existed because /route could only decide, not
+      // act, and the frontend had to carry the context between turns.
+      logger.chat('Sending to agent session', workingConversation.id);
+      try {
+        const response = await sessionClient.send(
+          workingConversation.id,
+          userMessage,
+          pinnedCard
+        );
 
-      // Route via the sidecar LLM first (tool call vs chat)
-      logger.model('Routing message via sidecar /route...');
-      const toolWasCalled = await handleToolExecution(routeMessages, workingConversation, assistantMessage);
-      
-      // /route is the only path to the model now. It always returns either a
-      // tool call or a non-empty reply, so it handles every turn it reaches.
-      //
-      // There used to be a fallback to /chat whenever /route returned nothing.
-      // That endpoint is given no tools, so when it was asked to find threads
-      // it answered by inventing them — every hallucinated result traced back
-      // to it. One door means a routing miss can give a poor answer, but never
-      // a fabricated one.
-      if (!toolWasCalled) {
-        // Only reachable if /route couldn't be reached at all. Say so, rather
-        // than leaving an empty bubble streaming with no fallback behind it.
-        logger.error('Route did not handle the turn — sidecar unreachable?');
+        // Record searches for the Memory view. This used to live in
+        // SearchTool; with the agent owning tool execution, the tool call it
+        // reports back is the only place the frontend learns a search happened.
+        for (const call of response.tool_calls ?? []) {
+          const keyword = call.arguments?.keyword_filter;
+          if (call.name === 'search_threads' && typeof keyword === 'string' && keyword.trim()) {
+            chrome.runtime.sendMessage({
+              type: MessageType.NEW_SEARCH,
+              data: { query: keyword },
+            }).catch(() => {
+              logger.debug('No listeners for NEW_SEARCH, this is expected');
+            });
+          }
+        }
+
+        const content = response.error
+          ? `I couldn't answer just now: ${response.error}`
+          : formatAgentReply(response);
+
+        setStreamingMessage(prev => prev ? { ...prev, content, isStreaming: false } : null);
+        await ConversationManager.updateMessage(
+          workingConversation.id,
+          assistantMessage.id,
+          content
+        );
+
+        const updated = await ConversationManager.getConversation(workingConversation.id);
+        if (updated) {
+          onConversationUpdated(updated);
+        }
+        setStreamingMessage(null);
+      } catch (error) {
+        logger.error('Agent request failed:', error);
         const failureContent =
-          "I couldn't reach the local model just now. Check that the sidecar is running, then try again.";
+          "I couldn't reach the local model just now. Check that the sidecar and model server are running, then try again.";
         await ConversationManager.updateMessage(
           workingConversation.id,
           assistantMessage.id,
           failureContent
         );
-        const failedConversation = await ConversationManager.getConversation(workingConversation.id);
-        if (failedConversation) {
-          onConversationUpdated(failedConversation);
+        const failed = await ConversationManager.getConversation(workingConversation.id);
+        if (failed) {
+          onConversationUpdated(failed);
         }
         setStreamingMessage(null);
-        return;
       }
-
-      logger.debug('Route handled the turn');
       return;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to get response');
