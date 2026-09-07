@@ -262,8 +262,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       // One call to the agent. It owns the tool loop and its own conversation
       // history, so there is no history to rebuild here and no tool output to
-      // replay — that machinery existed because /route could only decide, not
-      // act, and the frontend had to carry the context between turns.
+      // replay — that machinery existed because the old router could only
+      // decide, not act, and the frontend carried context between turns.
       logger.chat('Sending to agent session', workingConversation.id);
       try {
         const response = await sessionClient.send(

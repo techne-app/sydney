@@ -1,9 +1,9 @@
 """The ADK agent — one loop that can call tools repeatedly before answering.
 
-The problem this solves: /route gives the model exactly one tool call per turn
-and then stops. When a question needs something the model doesn't have — the
-next page of results, what a thread actually says — it cannot ask, so it
-invents. Every hallucination this project has hit came from that gap.
+The problem this solves: routing used to give the model exactly one tool call
+per turn and then stop. When a question needed something the model didn't have
+— the next page of results, what a thread actually says — it couldn't ask, so
+it invented. Every hallucination this project hit came from that gap.
 
 Here the model calls a tool, sees the result, and decides again. ADK's Runner
 drives that loop; the tools below are plain Python functions, and ADK builds
@@ -106,8 +106,8 @@ def search_threads(keyword_filter: str) -> Dict[str, Any]:
         keyword_filter: The topic or keywords to search discussions for.
     """
     # ADK reads this function's name, type hints and docstring to build the
-    # tool schema it sends the model — the same information sidecar/tools.py
-    # spells out by hand for /route.
+    # tool schema it sends the model. There is no hand-written schema to keep
+    # in sync — the function is the tool.
     print(f"[agent] search_threads(keyword_filter={keyword_filter!r})")
     return search.run_search(keyword_filter, limit=3)
 
