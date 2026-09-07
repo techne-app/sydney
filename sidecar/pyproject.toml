@@ -14,4 +14,19 @@ dependencies = [
     # not bundle by default — TLS then fails only in the compiled binary.
     "httpx",
     "nuitka>=4.0.7",
+    # The agent (see agent.py). Deliberately NOT google-adk[extensions] or [db]:
+    # between them those extras pull kubernetes, docker, crewai, langgraph,
+    # anthropic, openai and sqlalchemy-spanner into a local desktop app. Each
+    # package below is what ADK actually reaches for at runtime.
+    "google-adk>=2.8.0",
+    # LiteLlm only checks importlib.util.find_spec("litellm"), so the package
+    # alone satisfies it — no extra needed.
+    "litellm>=1.100.0",
+    # DatabaseSessionService: sqlalchemy for the ORM, aiosqlite for the async
+    # sqlite driver, greenlet for sqlalchemy's async bridge. None are declared
+    # by base google-adk; each surfaced only when that code path first ran.
+    # All three are Nuitka risks of the certifi shape — test the compiled binary.
+    "sqlalchemy>=2.0.52",
+    "aiosqlite>=0.22.1",
+    "greenlet>=3.5.5",
 ]
