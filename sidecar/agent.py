@@ -19,6 +19,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
+import corpus
 import search
 from llm import LLAMA_SERVER_URL
 
@@ -36,9 +37,11 @@ DB_PATH = os.path.join(DB_DIR, "sessions.db")
 
 BASE_INSTRUCTION = (
     "You help a user explore Hacker News. Use search_threads to find "
-    "discussions on a topic. Answer from what the tools return — do not invent "
-    "discussions, titles, or links. If you do not have enough information to "
-    "answer, say so plainly rather than guessing."
+    "discussions on a topic, and get_thread to read one in detail when the "
+    "user asks about a specific result. Answer from what the tools return — do "
+    "not invent discussions, titles, or links. If you do not have enough "
+    "information to answer, say so plainly rather than guessing. Do not show "
+    "thread ids to the user; they are for your own tool calls."
 )
 
 # The thread the user has dragged into the chat, and whether it is still open.
@@ -112,6 +115,29 @@ def search_threads(keyword_filter: str) -> Dict[str, Any]:
     return search.run_search(keyword_filter, limit=3)
 
 
+def get_thread(thread_id: int) -> Dict[str, Any]:
+    """Get the full summary of one Hacker News discussion thread.
+
+    Use this when the user asks about a specific discussion you have already
+    found — for example "what was the second one about?" or "tell me more about
+    that Rust thread". Search results carry only a title and theme; this
+    returns the summary of what was actually discussed.
+
+    Args:
+        thread_id: The id of the thread, taken from an earlier search result.
+    """
+    print(f"[agent] get_thread(thread_id={thread_id!r})")
+    thread = corpus.get(thread_id)
+    if thread is None:
+        return {
+            "error": (
+                "No thread with that id is in the last 30 days of data. "
+                "Search for the topic instead."
+            )
+        }
+    return thread
+
+
 _agent = LlmAgent(
     model=LiteLlm(
         model="openai/gemma",
@@ -124,7 +150,7 @@ _agent = LlmAgent(
     ),
     name=APP_NAME,
     instruction=_instruction,
-    tools=[search_threads],
+    tools=[search_threads, get_thread],
 )
 
 _session_service: DatabaseSessionService | None = None
@@ -200,9 +226,16 @@ async def send(
                 tool_calls.append({"name": call.name, "arguments": dict(call.args or {})})
             elif response:
                 # Keep the structured output so the UI can render it directly.
+                # search_threads returns {"results": [...]}; get_thread returns a
+                # single thread. Both need capturing, or a turn that reads one
+                # discussion leaves the user with prose and no way to open it.
                 payload = response.response
-                if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                if not isinstance(payload, dict):
+                    continue
+                if isinstance(payload.get("results"), list):
                     results.extend(payload["results"])
+                elif payload.get("thread_id") and payload.get("anchor"):
+                    results.append(payload)
             elif getattr(part, "text", None):
                 reply_parts.append(part.text)
 
