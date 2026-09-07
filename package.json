@@ -1,6 +1,6 @@
 {
   "name": "techne-extension",
-  "version": "1.8.50",
+  "version": "1.8.51",
   "description": "An extension that helps navigate Hacker News with AI-generated tags using Techne.",
   "scripts": {
     "build": "webpack --mode=production",
