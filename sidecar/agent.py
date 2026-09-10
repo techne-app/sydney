@@ -13,7 +13,6 @@ import os
 from typing import Any, Dict, Optional
 
 from google.adk.agents import LlmAgent
-from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
@@ -42,63 +41,36 @@ BASE_INSTRUCTION = (
     "not invent discussions, titles, or links. If you do not have enough "
     "information to answer, say so plainly rather than guessing. Do not show "
     "thread ids to the user; they are for your own tool calls."
+    "\n\nA message may begin with a note about a discussion the user has open "
+    "in front of them. When they say \"this thread\", \"this discussion\", "
+    "\"this\", or \"this one\", they mean that one — not an item from a list "
+    "of search results. Answer from the note; there is no need to search."
 )
 
-# The thread the user has dragged into the chat, and whether it is still open.
+# The thread the user has dragged into the chat travels WITH the message it was
+# sent alongside, rather than living in session state.
 #
-# Two keys, not one, because pinning is both an event and a context. Clearing
-# the thread on unpin looked tidier but broke the transcript: the model would
-# read its own earlier answer about a thread, find no trace of it in the prompt,
-# and conclude it had hallucinated — retracting a correct answer and telling the
-# user it had made things up. A model's past statements have to stay explicable
-# from what it can currently see, so a closed thread stays visible and is marked
-# closed rather than deleted.
-PINNED_KEY = "pinned_thread"
-PINNED_ACTIVE_KEY = "pinned_active"
-
-
-def _describe(thread: Dict[str, Any]) -> str:
-    return (
-        f"- Title: {thread.get('story_title', '')}\n"
-        f"- Theme: {thread.get('theme', '')}\n"
-        f"- Category: {thread.get('category', '')}\n"
-        f"- Comments: {thread.get('comment_count', '')}\n"
-        f"- Summary: {thread.get('summary', '')}\n"
-    )
-
-
-def _instruction(context: ReadonlyContext) -> str:
-    """Build the system prompt from current session state.
-
-    Note there is no summarize_pinned_thread tool. Summarizing what the user is
-    already looking at is not a capability the agent needs — the summary is
-    right here in the prompt, so the model simply answers. That tool only ever
-    existed because the old frontend had to be told which action to run.
-    """
-    state = context.state or {}
-    thread = state.get(PINNED_KEY)
-
+# State was the wrong home for it, and failed in a way worth recording. State
+# feeds the system prompt, which has no position in time — as far as the model
+# can tell it has always said this — while a thread just read with get_thread
+# sits in the newest message. Asked to explain "this thread", the model picked
+# the recent one. That is a correct reading of what it could see, and no amount
+# of instruction wording outranked it (measured: it still chose the wrong thread
+# with an explicit "the user opened it just now" line in the prompt).
+#
+# An attachment belongs to the turn it was attached to. Putting it there makes
+# the pin the most recent thing in the conversation, which is what the user
+# means by "this", and it makes history self-describing: an old turn keeps its
+# attachment, so unpinning cannot make the model disown an earlier answer as
+# invented — which is what deleting the state used to cause.
+def _with_attachment(message: str, thread: Optional[Dict[str, Any]]) -> str:
     if not thread:
-        return BASE_INSTRUCTION + "\n\nThe user has no discussion open right now."
-
-    if state.get(PINNED_ACTIVE_KEY):
-        return BASE_INSTRUCTION + (
-            "\n\nThe user currently has this discussion open:\n"
-            + _describe(thread)
-            + "When they say \"this thread\", \"this discussion\", \"this\", or "
-            "\"this one\", they mean the open discussion above — not an item "
-            "from a list of search results. If they mean a search result they "
-            "will name it or give its number. Answer from the summary above; "
-            "there is no need to search for it."
-        )
-
-    # Closed, but kept so earlier turns still make sense.
-    return BASE_INSTRUCTION + (
-        "\n\nEarlier in this conversation the user had this discussion open:\n"
-        + _describe(thread)
-        + "They have since closed it. Anything you said about it earlier was "
-        "correct and based on this summary — do not treat it as invented. "
-        "\"This\" no longer refers to it, so ask which discussion they mean."
+        return message
+    return (
+        "[The user has this discussion open in front of them:\n"
+        f"\"{thread.get('story_title', '')}\" — {thread.get('theme', '')}.\n"
+        f"What people said: {thread.get('summary', '')}]\n\n"
+        f"{message}"
     )
 
 
@@ -120,8 +92,8 @@ def get_thread(thread_id: int) -> Dict[str, Any]:
 
     Use this when the user asks about a specific discussion you have already
     found — for example "what was the second one about?" or "tell me more about
-    that Rust thread". Search results carry only a title and theme; this
-    returns the summary of what was actually discussed.
+    that Rust thread". Search results carry only a title and a one-line description;
+    this returns what was actually discussed, plus the link to it.
 
     Args:
         thread_id: The id of the thread, taken from an earlier search result.
@@ -135,7 +107,7 @@ def get_thread(thread_id: int) -> Dict[str, Any]:
                 "Search for the topic instead."
             )
         }
-    return thread
+    return corpus.public_view(thread, detail=True)
 
 
 _agent = LlmAgent(
@@ -149,7 +121,7 @@ _agent = LlmAgent(
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     ),
     name=APP_NAME,
-    instruction=_instruction,
+    instruction=BASE_INSTRUCTION,
     tools=[search_threads, get_thread],
 )
 
@@ -199,13 +171,7 @@ async def send(
             app_name=APP_NAME, user_id=USER_ID, session_id=session_id
         )
 
-    # Record what the user has open. On unpin the thread is kept and flagged
-    # closed rather than deleted — see the note on PINNED_KEY. Only overwrite
-    # the thread itself when one is open, so closing does not erase which one
-    # it was.
-    state_delta: Dict[str, Any] = {PINNED_ACTIVE_KEY: pinned_thread is not None}
-    if pinned_thread is not None:
-        state_delta[PINNED_KEY] = pinned_thread
+    print(f"[agent] attached={'yes: ' + str(pinned_thread.get('story_title')) if pinned_thread else 'none'}")
 
     reply_parts: list[str] = []
     tool_calls: list[Dict[str, Any]] = []
@@ -214,8 +180,10 @@ async def send(
     async for event in _runner.run_async(
         user_id=USER_ID,
         session_id=session.id,
-        new_message=types.Content(role="user", parts=[types.Part(text=message)]),
-        state_delta=state_delta,
+        new_message=types.Content(
+            role="user",
+            parts=[types.Part(text=_with_attachment(message, pinned_thread))],
+        ),
     ):
         if not (event.content and event.content.parts):
             continue
@@ -234,8 +202,19 @@ async def send(
                     continue
                 if isinstance(payload.get("results"), list):
                     results.extend(payload["results"])
-                elif payload.get("thread_id") and payload.get("anchor"):
-                    results.append(payload)
+                elif payload.get("thread_id"):
+                    # The link comes from the corpus, not from the payload the
+                    # model saw — see corpus.public_view. Looking it up here is
+                    # also what guarantees it is right: a model retyping a
+                    # 50-character URL gets one character wrong eventually, and
+                    # a dead link is only noticed when somebody clicks it.
+                    row = corpus.get(payload["thread_id"])
+                    if row:
+                        results.append({
+                            "thread_id": row.get("thread_id"),
+                            "title": row.get("story_title"),
+                            "link": row.get("anchor"),
+                        })
             elif getattr(part, "text", None):
                 reply_parts.append(part.text)
 

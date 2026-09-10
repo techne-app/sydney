@@ -16,14 +16,21 @@ import { ThreadCardData } from '../types/chat';
 
 const SIDECAR_URL = 'http://localhost:8000';
 
+/**
+ * A thread as the agent's tools return it — see corpus.public_view. These are
+ * deliberately not our database column names: the model echoes the keys it is
+ * handed, so `theme` came back as "Theme:" in replies meant for a user who has
+ * never heard the word. `link` is only present on get_thread results; a search
+ * hit has no link, which is what stops the UI appending a second copy of the
+ * list the model just wrote.
+ */
 export interface SearchHit {
   thread_id: number;
-  story_id: number;
-  story_title: string;
-  theme: string;
-  category: string;
-  anchor: string;
-  score: number;
+  title: string;
+  /** Search hits only — the one-line description of what the thread is about. */
+  about?: string;
+  /** get_thread results only. The UI renders a link for exactly these. */
+  link?: string;
 }
 
 export interface AgentResponse {
@@ -54,12 +61,14 @@ class SessionClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
+          // Only what the attachment note is built from. `category` and
+          // `comment_count` were being sent and never read — they are our
+          // taxonomy and a number, and neither answers anything the user asks
+          // about the thread they have open.
           pinned_thread: pinnedThread
             ? {
                 story_title: pinnedThread.story_title,
                 theme: pinnedThread.theme,
-                category: pinnedThread.category,
-                comment_count: pinnedThread.comment_count,
                 summary: pinnedThread.summary,
               }
             : null,

@@ -316,3 +316,32 @@ def start() -> None:
     it finishes, /search reports that it is still loading.
     """
     threading.Thread(target=_loop, daemon=True, name="corpus-sync").start()
+
+
+# Our column names are database vocabulary. "theme", "category", "summary",
+# "anchor", "story_title" mean something to us and nothing to the person reading
+# the reply — and the model echoes the shape it is handed, so given a `theme`
+# key it writes "Theme: …" in prose meant for someone who has never heard of it.
+#
+# So the rename happens once, here, on the way out to the model. Every path that
+# shows it a thread goes through this: a search hit, get_thread, and the pinned
+# prompt. Renaming in one path and leaving the others is what let the labels keep
+# reappearing after each fix — there were three doors, not one.
+#
+# `category` is dropped rather than renamed: values like "Industry Analysis" are
+# our taxonomy, and nothing the user asks is answered by them.
+def public_view(row: Dict[str, Any], detail: bool = False) -> Dict[str, Any]:
+    """A thread as the model should see it. `detail` adds what get_thread fetches."""
+    view = {
+        "thread_id": row.get("thread_id"),   # not for display; get_thread needs it
+        "title": row.get("story_title"),
+        "about": row.get("theme"),
+    }
+    if detail:
+        view["discussion"] = row.get("summary")
+    # No link, deliberately — not even on the detail view. Handed a URL, the
+    # model writes it into its prose, and the UI then renders the same link a
+    # second time from the tool output. The UI is the one that shows links (it
+    # gets them from the corpus by thread_id, so they are always exact); the
+    # model cannot repeat a link it was never given.
+    return view
