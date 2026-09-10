@@ -151,4 +151,4 @@ def run_search(query: str, limit: int = 3) -> Dict[str, Any]:
     if not picks:
         picks = list(range(min(limit, len(candidates))))
 
-    return {"results": [{**candidates[i][0], "score": candidates[i][1]} for i in picks]}
+    return {"results": [corpus.public_view(candidates[i][0]) for i in picks]}

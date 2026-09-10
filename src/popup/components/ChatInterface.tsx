@@ -96,10 +96,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return reply || "I couldn't find anything for that.";
     }
 
+    // Only hits that carry a link get rendered. search_threads deliberately
+    // returns none — it lists options, and appending a second copy of that list
+    // meant the same threads appeared twice in different orders, so "the second
+    // one" meant different threads to the user and the model. get_thread does
+    // return one, so the link shows up exactly when a discussion has been
+    // chosen to explore.
     const seen = new Set<number>();
     const lines = hits
-      .filter(hit => !seen.has(hit.thread_id) && seen.add(hit.thread_id))
-      .map((hit, i) => `${i + 1}. [${hit.theme}](${hit.anchor}) — ${hit.story_title}`);
+      .filter(hit => hit.link && !seen.has(hit.thread_id) && seen.add(hit.thread_id))
+      .map(hit => `[${hit.title}](${hit.link})`);
+
+    if (lines.length === 0) {
+      return reply;
+    }
 
     return `${reply}\n\n${lines.join('\n\n')}`;
   };
