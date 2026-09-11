@@ -59,17 +59,17 @@ curl -L "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main
   -o sidecar/models/nomic-embed-text-v1.5.Q8_0.gguf
 ```
 
-The same Gemma file the pipeline runs (`techne-pipeline/models/`), so copying it
-from there is faster if you have it. Note the Hugging Face copy has since been
-re-uploaded and differs slightly (13,019,981,440 vs 13,019,979,680 bytes). Gemma's
-tool-call syntax lives in the chat template *inside* the GGUF and `sidecar/main.py`
-parses it, so after a fresh download re-run the routing checks before trusting it:
-a changed template breaks search and summarize silently, without erroring.
+If you have `techne-pipeline` checked out, copying Gemma from its `models/`
+folder is faster than downloading. That copy is slightly older than the one above
+— different chat template, same behaviour; both pass the full check suite.
 
-Both filenames appear in `sidecar/main.py` (`MODEL_NAME` / `EMBED_MODEL_NAME`)
-and in `src-tauri/tauri.conf.json` (`bundle.resources`). Swapping a model means
-updating both — the bundle names files explicitly so a leftover GGUF in
-`sidecar/models/` can't quietly add gigabytes to the DMG.
+The Gemma filename appears in **`src-tauri/src/lib.rs`** (the `-m` path
+production spawns llama-server with) and in `src-tauri/tauri.conf.json`
+(`bundle.resources`); the Dev Mode command below has it too. The nomic
+filename is `EMBED_MODEL_NAME` in `sidecar/search.py`. Swapping either model
+means updating every one of those — the bundle names files explicitly, so a
+leftover GGUF in `sidecar/models/` can't quietly add gigabytes to the DMG (which
+is why the unused `Qwen3-4B-Q4_K_M.gguf` sitting there costs nothing).
 
 ## Dev Mode
 
@@ -77,7 +77,15 @@ Run the model server and Python sidecar from source — no compilation needed,
 fast iteration. In production Tauri starts both for you; in dev you start them
 by hand.
 
-Open three terminal windows:
+Open three terminal windows.
+
+First check both ports are free — **quitting the packaged app does not always
+stop its llama-server and sidecar**, and leftovers make the commands below fail
+to bind:
+
+```bash
+lsof -ti :8081 :8000    # kill anything listed, then continue
+```
 
 **Terminal 1 — Start the model server**
 ```bash
@@ -113,12 +121,25 @@ npm run tauri:dev
 Creates a standalone `.dmg` installer that bundles the app, sidecar binary, and AI model.
 
 **Step 8 — Compile the Python sidecar with Nuitka** *(rerun after **any** change under `sidecar/`)*
+
 ```bash
 cd sidecar
 uv run python -m nuitka --onefile \
   --output-filename=sidecar-aarch64-apple-darwin \
   --include-package-data=certifi \
   --include-package-data=llama_cpp \
+  --include-package-data=litellm \
+  --include-package=aiosqlite \
+  --include-package=greenlet \
+  --include-package=google.genai._gaos \
+  --include-package=rich \
+  --include-package=importlib_metadata \
+  --include-package=packaging \
+  --include-package=charset_normalizer \
+  --include-module=litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt \
+  --include-module=litellm.llms.litellm_proxy.chat.transformation \
+  --include-module=litellm.llms.openai.chat.gpt_audio_transformation \
+  --include-module=aiohttp._websocket.reader_c \
   --assume-yes-for-downloads \
   main.py
 mkdir -p ../src-tauri/binaries
@@ -126,47 +147,73 @@ mv sidecar-aarch64-apple-darwin ../src-tauri/binaries/
 cd ..
 ```
 
-The two `--include-package-data` flags matter, and both fail *only* in the
-compiled binary — never in `uv run`, so dev proves nothing here:
+**This takes about 70 minutes and looks frozen for most of it.** `google-adk`
+pulls in `google.genai.types` — thousands of generated classes in one C file,
+which alone takes 65 of those minutes. The progress bar sits at `6380/6381` the
+whole time. It is not hung; don't kill it, there is no partial credit.
 
-- **certifi** ships `cacert.pem`, the trusted-CA list Python needs to verify
-  HTTPS. Without it the corpus fetch from `techne.app` fails and search quietly
-  returns nothing.
-- **llama_cpp** ships the compiled library and Metal shaders. Without them the
-  models don't load at all.
+The long flag list exists because Nuitka only compiles what it can see being
+imported. These packages resolve modules from runtime strings, so they are
+invisible to it and missing only in the compiled binary — never under `uv run`.
+If you add a dependency and the binary dies with `ModuleNotFoundError` while dev
+works fine, that is the same cause, and the fix is another `--include-package`.
 
-Nothing automates this step, so a stale binary is easy to ship: the `.app` runs
-whatever `main.py` was compiled last, not what's in the working tree. **Always
-run the compiled binary directly** (`./src-tauri/binaries/sidecar-aarch64-apple-darwin`)
-and check search works before building the dmg.
+**Then run the compiled binary before bundling** — a stale or broken binary is
+otherwise invisible until the app is installed. It finds models relative to its
+own directory, so mirror the production layout:
 
-**Step 9 — Grant Automation permission** *(one-time setup)*
+```bash
+mkdir -p src-tauri/Resources && ln -sfn ../../sidecar/models src-tauri/Resources/models
+./src-tauri/binaries/sidecar-aarch64-apple-darwin
+rm -rf src-tauri/Resources   # Tauri builds its own
+```
 
-The build creates a DMG installer with a drag-and-drop window. macOS requires your terminal to have permission to control Finder for this.
+Healthy startup prints `Embedding model loaded.`, `[agent] sessions at ...`, and
+a corpus line. Ctrl+C when you've seen them.
 
-System Settings → Privacy & Security → Automation → find your terminal app → enable the **Finder** checkbox.
+**Step 9 — Build**
 
-**Step 10 — Build**
 ```bash
 npm run tauri:build
 ```
+
+**While this runs, a disk image is created and mounted, and a Finder window opens
+showing the app beside an Applications shortcut. Leave it alone until the build
+says `Finished`.** That window is part of the build, not an invitation to
+install. Dragging the app out of it starts a 13GB Finder copy that holds the
+volume, so the script cannot eject it and the build fails with
+`error running bundle_dmg.sh`. This is by far the most common way for this build
+to fail, and it looks like a permissions problem when it isn't — Automation
+permission for Finder is not required.
 
 **Output:**
 - `src-tauri/target/release/bundle/macos/Techne Navigator.app` — run this directly to test
 - `src-tauri/target/release/bundle/dmg/Techne Navigator_0.1.0_aarch64.dmg` — share this to distribute
 
-**To run the app**, either:
-1. Double-click `Techne Navigator.app` in the `macos/` folder — quickest way to test
-2. Or open the `.dmg`, drag `Techne Navigator` into `Applications`, launch from there — standard macOS install
+**To run the app**, either double-click the `.app` in `macos/`, or open the
+`.dmg` and drag `Techne Navigator` into `Applications`. Eject the disk image
+afterwards, so a stale mount can't interfere with the next build.
+
+First launch takes a minute or two: the app starts llama-server and the sidecar
+itself (unlike dev, where you start them by hand), and Gemma has 12GB to load.
 
 ### Troubleshooting
 
-**Build fails with `error running bundle_dmg.sh`**
-→ You didn't do Step 9. Grant Automation permission and retry.
+**`error running bundle_dmg.sh`** — something touched the mounted disk image
+during the build (see Step 9). Not a Finder permission problem, despite
+appearances. Clean up and retry without touching anything:
 
-**Orphaned `rw.*.dmg` files in `src-tauri/target/release/bundle/macos/`**
-→ Leftover from failed builds. Clean up and retry:
 ```bash
-rm -f src-tauri/target/release/bundle/macos/rw.*.dmg
+hdiutil detach /Volumes/dmg.* -force 2>/dev/null
+rm -f src-tauri/target/release/bundle/macos/rw.*.dmg src-tauri/target/release/bundle/dmg/rw.*.dmg
 npm run tauri:build
 ```
+
+Deleting those scratch files matters: `bundle/macos/` is what gets imaged, so a
+leftover 14GB `rw.*.dmg` ends up *inside* the dmg you ship.
+
+**Compile stuck at `6380/6381`** — it isn't, see Step 8. Check it's alive:
+`ps -o %cpu= -p $(pgrep -f "clang -cc1" | head -1)`.
+
+**`couldn't bind ... port 8081` (or 8000)** — the packaged app's llama-server and
+sidecar outlive it. `lsof -ti :8081 :8000`, kill what's listed.
