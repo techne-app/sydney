@@ -128,18 +128,6 @@ uv run python -m nuitka --onefile \
   --output-filename=sidecar-aarch64-apple-darwin \
   --include-package-data=certifi \
   --include-package-data=llama_cpp \
-  --include-package-data=litellm \
-  --include-package=aiosqlite \
-  --include-package=greenlet \
-  --include-package=google.genai._gaos \
-  --include-package=rich \
-  --include-package=importlib_metadata \
-  --include-package=packaging \
-  --include-package=charset_normalizer \
-  --include-module=litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt \
-  --include-module=litellm.llms.litellm_proxy.chat.transformation \
-  --include-module=litellm.llms.openai.chat.gpt_audio_transformation \
-  --include-module=aiohttp._websocket.reader_c \
   --assume-yes-for-downloads \
   main.py
 mkdir -p ../src-tauri/binaries
@@ -147,16 +135,18 @@ mv sidecar-aarch64-apple-darwin ../src-tauri/binaries/
 cd ..
 ```
 
-**This takes about 70 minutes and looks frozen for most of it.** `google-adk`
-pulls in `google.genai.types` — thousands of generated classes in one C file,
-which alone takes 65 of those minutes. The progress bar sits at `6380/6381` the
-whole time. It is not hung; don't kill it, there is no partial credit.
+**Not yet re-verified since the agent moved to Rust.** The sidecar used to
+carry `google-adk` and `litellm`, which needed a dozen extra `--include-*` flags
+and made this step take ~70 minutes — one generated file, `google.genai.types`,
+was 65 of them. Those dependencies are gone, so the flag list above is back to
+the two that predate them and the build should be far quicker. Confirm by
+running the compiled binary before trusting a bundle.
 
-The long flag list exists because Nuitka only compiles what it can see being
-imported. These packages resolve modules from runtime strings, so they are
-invisible to it and missing only in the compiled binary — never under `uv run`.
-If you add a dependency and the binary dies with `ModuleNotFoundError` while dev
-works fine, that is the same cause, and the fix is another `--include-package`.
+Nuitka compiles ahead of time and finds modules by reading `import` statements,
+so anything resolved from a runtime *string* is invisible to it and missing
+**only in the compiled binary** — never under `uv run`. If the binary dies with
+`ModuleNotFoundError` while dev works fine, that is the cause, and the fix is
+another `--include-package`.
 
 **Then run the compiled binary before bundling** — a stale or broken binary is
 otherwise invisible until the app is installed. It finds models relative to its

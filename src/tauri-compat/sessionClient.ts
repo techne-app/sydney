@@ -1,20 +1,18 @@
 /**
- * Talks to the sidecar's agent.
+ * Talks to the agent in Tauri core.
  *
- * One endpoint serves every conversation; the session id in the path selects
- * which history to load. The Dexie conversation id IS the session id, so a
- * conversation and an agent session are the same thing seen from two sides —
- * Dexie holds the rendered prose the UI displays, the agent's SQLite store
- * holds the structure it reasons over.
+ * The conversation id IS the agent's session id, so a conversation and an agent
+ * session are the same thing seen from two sides — Dexie holds the rendered
+ * prose the UI displays, the agent's SQLite store holds the structure it
+ * reasons over.
  *
- * Replaces routeClient + ToolOrchestrator: the agent runs its own tool loop,
- * so the frontend no longer decides what to execute or replays tool output
- * back as conversation history.
+ * The agent used to live in the Python sidecar and was reached over HTTP. It
+ * now runs in Rust inside the app process, so this is a Tauri command rather
+ * than a fetch — iOS forbids the subprocesses that design depended on.
  */
+import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
 import { ThreadCardData } from '../types/chat';
-
-const SIDECAR_URL = 'http://localhost:8000';
 
 /**
  * A thread as the agent's tools return it — see corpus.public_view. These are
@@ -54,33 +52,22 @@ class SessionClient {
     message: string,
     pinnedThread?: ThreadCardData | null
   ): Promise<AgentResponse> {
-    const response = await fetch(
-      `${SIDECAR_URL}/sessions/${encodeURIComponent(sessionId)}/messages`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          // Only what the attachment note is built from. `category` and
-          // `comment_count` were being sent and never read — they are our
-          // taxonomy and a number, and neither answers anything the user asks
-          // about the thread they have open.
-          pinned_thread: pinnedThread
-            ? {
-                story_title: pinnedThread.story_title,
-                theme: pinnedThread.theme,
-                summary: pinnedThread.summary,
-              }
-            : null,
-        }),
-      }
-    );
+    const data = await invoke<AgentResponse>('send_message', {
+      sessionId,
+      message,
+      // Only what the attachment note is built from. `category` and
+      // `comment_count` were being sent and never read — they are our
+      // taxonomy and a number, and neither answers anything the user asks
+      // about the thread they have open.
+      pinnedThread: pinnedThread
+        ? {
+            story_title: pinnedThread.story_title,
+            theme: pinnedThread.theme,
+            summary: pinnedThread.summary,
+          }
+        : null,
+    });
 
-    if (!response.ok) {
-      throw new Error(`Sidecar returned ${response.status}`);
-    }
-
-    const data = (await response.json()) as AgentResponse;
     logger.chat('[sessionClient] tools:', data.tool_calls?.length ?? 0,
                 '| results:', data.results?.length ?? 0);
     return data;

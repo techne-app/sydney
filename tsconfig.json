@@ -11,5 +11,17 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "exclude": ["vite.config.ts", "node_modules"]
+  "exclude": [
+    "vite.config.ts",
+    "node_modules",
+    "spike",
+    "dist",
+    "dist-tauri",
+    "coverage",
+    // `allowJs` is on, so without this the extension build tries to typecheck
+    // the JavaScript Tauri generates under target/ and fails on minified and
+    // binary assets. Only bites after a Tauri build, which is why CI — with a
+    // fresh checkout and no target/ — never sees it.
+    "src-tauri/target"
+  ]
 } 
