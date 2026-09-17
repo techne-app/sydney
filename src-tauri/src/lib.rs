@@ -1,3 +1,6 @@
+pub mod agent;
+pub mod memory;
+
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
@@ -16,7 +19,10 @@ pub fn run() {
   tauri::Builder::default()
   //import the plugin to allow us to spawn the sidecar
     .plugin(tauri_plugin_shell::init())
-    .invoke_handler(tauri::generate_handler![open_external_url])
+    .manage(agent::AgentMemory(std::sync::Arc::new(
+      memory::SqliteConversationMemory::open().expect("failed to open agent memory"),
+    )))
+    .invoke_handler(tauri::generate_handler![open_external_url, agent::send_message])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

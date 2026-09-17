@@ -1,5 +1,9 @@
 [package]
 name = "app"
+# `cargo run` is ambiguous once the crate has more than one binary, and
+# `tauri dev` shells out to plain `cargo run`. The app is the default; the
+# check runner is opt-in via `cargo run --bin check`.
+default-run = "app"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
@@ -24,3 +28,9 @@ log = "0.4"
 tauri = { version = "2.10.0", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
+rig-core = "0.42"
+rig-agent = "0.42"
+thiserror = "2.0.20"
+reqwest = { version = "0.12", features = ["json"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
