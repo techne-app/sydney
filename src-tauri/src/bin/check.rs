@@ -84,15 +84,17 @@ async fn main() {
         corpus.refresh().await;
     }
     let embedder = Arc::new(Embedder::load().expect("load embedding model"));
+    println!("(loading Gemma in-process — a minute or two)");
+    let model = Arc::new(app_lib::agent::load_model().expect("load chat model"));
 
     let mut report = Report { failures: vec![] };
 
     macro_rules! turn {
         ($sid:expr, $msg:expr) => {
-            run_turn(memory.clone(), corpus.clone(), embedder.clone(), $sid.to_string(), $msg.to_string(), None).await
+            run_turn(memory.clone(), corpus.clone(), embedder.clone(), model.clone(), $sid.to_string(), $msg.to_string(), None).await
         };
         ($sid:expr, $msg:expr, $pin:expr) => {
-            run_turn(memory.clone(), corpus.clone(), embedder.clone(), $sid.to_string(), $msg.to_string(), Some($pin)).await
+            run_turn(memory.clone(), corpus.clone(), embedder.clone(), model.clone(), $sid.to_string(), $msg.to_string(), Some($pin)).await
         };
     }
 

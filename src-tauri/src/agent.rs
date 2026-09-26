@@ -1,8 +1,9 @@
 //! The agent, in Tauri core.
 //!
-//! Replaces `sidecar/agent.py`. The model still runs in llama-server on :8081;
-//! everything else — the agent, the corpus, search — is in this process now.
-//! The tools below call Rust directly rather than crossing HTTP to Python.
+//! Replaces `sidecar/agent.py`. Everything now runs in this one process: the
+//! agent, the corpus, search, and — since #47 — Gemma itself. There is no
+//! sidecar and no model server, which is what iOS requires: it forbids the
+//! subprocesses the original design was built on.
 //!
 //! The problem the agent solves is unchanged: the model calls a tool, sees the
 //! result, and decides again. Routing used to give it one tool call per turn and
@@ -14,13 +15,18 @@ use std::sync::{Arc, Mutex};
 use rig_core::agent::AgentBuilder;
 use rig_core::client::CompletionClient;
 use rig_core::completion::Prompt;
-use rig_core::providers::llamafile;
 use rig_core::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// The inference server. Replaced by in-process llama-cpp-2 in #47.
-const LLAMA_SERVER_URL: &str = "http://localhost:8081";
+/// Gemma. Loaded once at startup — see `Model` — because this reads 12GB from
+/// disk, which would be fatal per request.
+const CHAT_MODEL: &str = "google_gemma-4-26B-A4B-it-Q3_K_M.gguf";
+
+/// Gemma's own template is applied by rig-llama-cpp, which also parses the
+/// `<|tool>` markers back into structured tool calls. That is the work
+/// `llama-server --jinja` used to do for us over HTTP.
+const N_CTX: u32 = 8192;
 
 /// Carried over verbatim from agent.py. The "or links" clause is load-bearing:
 /// without it the model builds `item?id={thread_id}` out of the id it was given
@@ -113,6 +119,7 @@ pub struct SearchArgs {
 struct SearchThreads {
     corpus: Arc<crate::corpus::Corpus>,
     embedder: Arc<crate::search::Embedder>,
+    model: Arc<rig_llama_cpp::Client>,
     collected: Shared,
 }
 
@@ -145,7 +152,7 @@ impl Tool for SearchThreads {
             arguments: json!({ "keyword_filter": args.keyword_filter }),
         });
 
-        let body = crate::search::run_search(&self.corpus, &self.embedder, &args.keyword_filter, 3).await;
+        let body = crate::search::run_search(&self.corpus, &self.embedder, &self.model, &args.keyword_filter, 3).await;
 
         // Search lists options; get_thread is how you explore one. A hit carries
         // neither the summary nor a link — that is what stops the UI appending a
@@ -233,7 +240,53 @@ impl Tool for GetThread {
 /// must not be rebuilt per request — it loads a model from disk.
 pub struct AgentMemory(pub Arc<crate::memory::SqliteConversationMemory>);
 pub struct AppCorpus(pub Arc<crate::corpus::Corpus>);
-pub struct AppEmbedder(pub Arc<crate::search::Embedder>);
+pub struct AppEmbedder(pub Loaded<crate::search::Embedder>);
+
+/// A model that must be released *before* the process exits.
+///
+/// llama.cpp frees the Metal device from a C++ static destructor at exit. A
+/// model still alive at that point leaves its residency sets non-empty, ggml
+/// aborts, and macOS shows "quit unexpectedly" on every close. Destructor
+/// ordering across libraries is not something a program can rely on, so the
+/// owner releases first: `RunEvent::Exit` calls `release`, the client's own Drop
+/// joins its worker thread and frees the context, and the static destructor
+/// then finds nothing to complain about.
+pub struct Loaded<T>(std::sync::RwLock<Option<Arc<T>>>);
+
+impl<T> Loaded<T> {
+    pub fn new(value: T) -> Self {
+        Self(std::sync::RwLock::new(Some(Arc::new(value))))
+    }
+
+    pub fn get(&self) -> Option<Arc<T>> {
+        self.0.read().ok().and_then(|slot| slot.clone())
+    }
+
+    /// Drop the value now. A turn still in flight holds its own Arc, so the
+    /// release simply waits for that clone to go — never mid-generation.
+    pub fn release(&self) {
+        if let Ok(mut slot) = self.0.write() {
+            slot.take();
+        }
+    }
+}
+
+/// Gemma, loaded once. The reranker in search.rs borrows the same handle, so
+/// there is one 12GB model in memory rather than two.
+pub struct Model(pub Loaded<rig_llama_cpp::Client>);
+
+/// Load Gemma. Blocking and slow — a minute or two — so the caller must show
+/// the user something while it runs.
+pub fn load_model() -> Result<rig_llama_cpp::Client, String> {
+    let path = crate::search::resolve_model(CHAT_MODEL);
+    println!("[agent] loading {path}");
+    let client = rig_llama_cpp::Client::builder(path)
+        .n_ctx(N_CTX)
+        .build()
+        .map_err(|e| e.to_string())?;
+    println!("[agent] chat model loaded");
+    Ok(client)
+}
 
 #[derive(Debug, Default, Serialize)]
 pub struct AgentReply {
@@ -255,32 +308,24 @@ impl AgentReply {
     }
 }
 
-/// Gemma takes a minute or two to load 12GB, and until it has, every request
-/// fails with a bare connection error. Saying so plainly is worth a round trip:
-/// a not-yet-ready server has twice sent us chasing bugs that did not exist.
-async fn llama_server_ready(http: &reqwest::Client) -> bool {
-    matches!(
-        http.get(format!("{LLAMA_SERVER_URL}/health"))
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await,
-        Ok(response) if response.status().is_success()
-    )
-}
-
 #[tauri::command]
 pub async fn send_message(
     memory: tauri::State<'_, AgentMemory>,
     corpus: tauri::State<'_, AppCorpus>,
     embedder: tauri::State<'_, AppEmbedder>,
+    model: tauri::State<'_, Model>,
     session_id: String,
     message: String,
     pinned_thread: Option<PinnedThread>,
 ) -> Result<AgentReply, String> {
+    let (Some(embedder), Some(model)) = (embedder.0.get(), model.0.get()) else {
+        return Ok(AgentReply::failed("The app is shutting down."));
+    };
     Ok(run_turn(
         memory.0.clone(),
         corpus.0.clone(),
-        embedder.0.clone(),
+        embedder,
+        model,
         session_id,
         message,
         pinned_thread,
@@ -294,16 +339,12 @@ pub async fn run_turn(
     memory: Arc<crate::memory::SqliteConversationMemory>,
     corpus: Arc<crate::corpus::Corpus>,
     embedder: Arc<crate::search::Embedder>,
+    model: Arc<rig_llama_cpp::Client>,
     session_id: String,
     message: String,
     pinned_thread: Option<PinnedThread>,
 ) -> AgentReply {
     let collected: Shared = Arc::new(Mutex::new(Collected::default()));
-    let http = reqwest::Client::new();
-
-    if !llama_server_ready(&http).await {
-        return AgentReply::failed("The model server is still starting up.");
-    }
 
     println!(
         "[agent] attached={}",
@@ -313,17 +354,14 @@ pub async fn run_turn(
         }
     );
 
-    let client = match llamafile::Client::from_url(LLAMA_SERVER_URL) {
-        Ok(client) => client,
-        Err(error) => return AgentReply::failed(error.to_string()),
-    };
-    let model = client.completion_model("gemma");
+    let completion_model = model.completion_model(CHAT_MODEL);
 
-    let agent = AgentBuilder::new(model)
+    let agent = AgentBuilder::new(completion_model)
         .preamble(BASE_INSTRUCTION)
         .tool(SearchThreads {
             corpus: corpus.clone(),
             embedder,
+            model: model.clone(),
             collected: collected.clone(),
         })
         .tool(GetThread {
@@ -333,12 +371,14 @@ pub async fn run_turn(
         // Rig runs ONE model call by default, so without this any tool use dies
         // with MaxTurnsError before the model ever answers. ADK looped by default.
         .default_max_turns(10)
-        // Gemma bills chain-of-thought against the same max_tokens as the answer
-        // and will spend all of it thinking, returning empty content with
-        // finish_reason=Length.
-        .additional_params(json!({
-            "chat_template_kwargs": { "enable_thinking": false }
-        }))
+        // Gemma bills chain-of-thought against the same max_tokens as the
+        // answer and will spend all of it thinking, returning empty content.
+        //
+        // In-process the key is `thinking`, NOT the HTTP-era
+        // `chat_template_kwargs.enable_thinking`: rig-llama-cpp reads this from
+        // additional_params and feeds it to the Jinja template itself. The old
+        // key is silently ignored.
+        .additional_params(json!({ "thinking": false }))
         .temperature(0.1)
         .max_tokens(2048)
         // Rig loads this conversation's history before the turn and appends the

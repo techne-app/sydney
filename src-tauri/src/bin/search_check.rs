@@ -50,6 +50,9 @@ async fn main() {
 
     println!("\n=== load nomic in-process ===");
     let started = std::time::Instant::now();
+    println!("(loading Gemma for the rerank step — a minute or two)");
+    let model = std::sync::Arc::new(app_lib::agent::load_model().expect("load chat model"));
+
     let embedder = match Embedder::load() {
         Ok(embedder) => embedder,
         Err(error) => {
@@ -73,7 +76,7 @@ async fn main() {
 
     println!("\n=== relevance: does a Rust query return Rust threads? ===");
     let started = std::time::Instant::now();
-    let results = run_search(&corpus, &embedder, "rust async runtimes", 3).await;
+    let results = run_search(&corpus, &embedder, &model, "rust async runtimes", 3).await;
     let rows = titles(&results);
     for row in &rows {
         println!("     · {row}");
@@ -89,7 +92,7 @@ async fn main() {
     );
 
     println!("\n=== a different query returns different threads ===");
-    let other = run_search(&corpus, &embedder, "sourdough bread baking", 3).await;
+    let other = run_search(&corpus, &embedder, &model, "sourdough bread baking", 3).await;
     let other_rows = titles(&other);
     for row in &other_rows {
         println!("     · {row}");
@@ -115,7 +118,7 @@ async fn main() {
     }
 
     println!("\n=== empty query is handled ===");
-    let empty = run_search(&corpus, &embedder, "   ", 3).await;
+    let empty = run_search(&corpus, &embedder, &model, "   ", 3).await;
     check("returns an error, not a panic", empty["error"].is_string(), String::new());
 
     println!("\n{}", "=".repeat(46));
