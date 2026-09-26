@@ -13,7 +13,6 @@ use std::sync::Arc;
 use rig_core::client::CompletionClient;
 use rig_core::completion::Prompt;
 use rig_core::embeddings::EmbeddingModel;
-use rig_core::providers::llamafile;
 use rig_llama_cpp::{EmbeddingClient, EmbeddingModelHandle};
 
 use crate::corpus::Corpus;
@@ -27,7 +26,6 @@ const EMBED_MODEL: &str = "nomic-embed-text-v1.5.Q8_0.gguf";
 /// pipeline's feed generation, which cosines to 100 then has the LLM pick a few.
 const RERANK_CANDIDATES: usize = 100;
 
-const LLAMA_SERVER_URL: &str = "http://localhost:8081";
 
 /// Locate a GGUF in the bundled .app, or in the dev checkout.
 ///
@@ -35,7 +33,7 @@ const LLAMA_SERVER_URL: &str = "http://localhost:8081";
 /// `cargo run --bin check` and `tauri dev` all sit at different depths under
 /// target/, so counting `..` gets it wrong for at least one of them. Walking up
 /// until `sidecar/models` appears works from all of them.
-fn resolve_model(name: &str) -> String {
+pub fn resolve_model(name: &str) -> String {
     let exe = std::env::current_exe().unwrap_or_default();
     let base = exe.parent().unwrap_or(std::path::Path::new("."));
 
@@ -167,6 +165,7 @@ fn parse_rerank_picks(text: &str, count: usize, limit: usize) -> Vec<usize> {
 pub async fn run_search(
     corpus: &Arc<Corpus>,
     embedder: &Embedder,
+    model: &Arc<rig_llama_cpp::Client>,
     query: &str,
     limit: usize,
 ) -> serde_json::Value {
@@ -194,7 +193,7 @@ pub async fn run_search(
         return serde_json::json!({ "results": [], "error": "No matching discussions found." });
     }
 
-    let picks = rerank(query, &candidates, limit).await;
+    let picks = rerank(model, query, &candidates, limit).await;
     let picks = if picks.is_empty() {
         (0..limit.min(candidates.len())).collect()
     } else {
@@ -208,23 +207,24 @@ pub async fn run_search(
     serde_json::json!({ "results": results })
 }
 
-/// One completion against the same model the agent uses. In #47 this becomes
-/// the in-process handle; the shape of the call does not change.
+/// One completion against the very same loaded model the agent uses — the
+/// handle is shared, so there is one Gemma in memory, not two. That sharing is
+/// why the corpus had to move to Rust first: while the reranker was still
+/// Python, going in-process would have meant a second 12GB copy.
 async fn rerank(
+    model: &Arc<rig_llama_cpp::Client>,
     query: &str,
     candidates: &[(crate::corpus::ThreadMeta, f32)],
     limit: usize,
 ) -> Vec<usize> {
-    let Ok(client) = llamafile::Client::from_url(LLAMA_SERVER_URL) else {
-        return vec![];
-    };
-    let agent = rig_core::agent::AgentBuilder::new(client.completion_model("gemma"))
+    let agent = rig_core::agent::AgentBuilder::new(model.completion_model("gemma"))
         .preamble("You rank search results. Answer with numbers only.")
-        // Without this Gemma spends the whole budget thinking and returns
-        // nothing — and 64 tokens is a very small budget to lose.
-        .additional_params(serde_json::json!({
-            "chat_template_kwargs": { "enable_thinking": false }
-        }))
+        // In-process the key is `thinking`, NOT the HTTP-era
+        // `chat_template_kwargs.enable_thinking` — rig-llama-cpp reads it from
+        // additional_params and feeds it to the Jinja template directly. The old
+        // key is silently ignored, and Gemma then spends its whole token budget
+        // thinking and returns empty content with finish_reason=Length.
+        .additional_params(serde_json::json!({ "thinking": false }))
         .temperature(0.1)
         .max_tokens(64)
         .build();

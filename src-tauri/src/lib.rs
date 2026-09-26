@@ -3,7 +3,6 @@ pub mod corpus;
 pub mod memory;
 pub mod search;
 
-use tauri::Manager;
 
 // Unused since external links moved to tauri-plugin-shell's own handler (it
 // already intercepts target="_blank" clicks; ours ran alongside it and the
@@ -29,8 +28,13 @@ pub fn run() {
       corpus::start(corpus.clone());
       corpus
     }))
-    .manage(agent::AppEmbedder(std::sync::Arc::new(
+    .manage(agent::AppEmbedder(agent::Loaded::new(
       search::Embedder::load().expect("failed to load the embedding model"),
+    )))
+    // Gemma: 12GB, a minute or two. Loaded once here rather than per request,
+    // which is the whole reason it lives in Tauri state.
+    .manage(agent::Model(agent::Loaded::new(
+      agent::load_model().expect("failed to load the chat model"),
     )))
     .invoke_handler(tauri::generate_handler![open_external_url, agent::send_message])
     .setup(|app| {
@@ -42,47 +46,21 @@ pub fn run() {
         )?;
       }
 
-      // Auto-start the model server, production only.
-      // In dev, run both by hand for fast iteration — see README.
-      if !cfg!(debug_assertions) {
-        // llama-server is NOT an externalBin: it resolves eight dylibs via
-        // @loader_path, i.e. from its own directory, and externalBin copies a
-        // single file. It ships as a resource folder instead and is launched
-        // by path so its libraries sit beside it.
-        let llama_dir = app
-          .path()
-          .resource_dir()
-          .expect("no resource dir")
-          .join("llama");
-        let model = app
-          .path()
-          .resource_dir()
-          .expect("no resource dir")
-          .join("models")
-          .join("google_gemma-4-26B-A4B-it-Q3_K_M.gguf");
-
-        std::process::Command::new(llama_dir.join("llama-server"))
-          .args([
-            "-m", model.to_str().expect("bad model path"),
-            // --jinja is load-bearing: it applies Gemma's own chat template so
-            // tool calls come back as structured `tool_calls`. Without it they
-            // arrive as raw <|tool_call> text and routing silently stops working.
-            "--jinja",
-            "-ngl", "99",
-            "-c", "8192",
-            "--host", "127.0.0.1",
-            "--port", "8081",
-          ])
-          .spawn()
-          .expect("failed to start llama-server");
-
-        // No Python sidecar any more: the corpus, search and the agent all run
-        // in this process (#48). Only the model server is still spawned, and #47
-        // removes that too.
-      }
+      // Nothing is spawned any more. The agent, the corpus, search and both
+      // models all run in this process — no sidecar, no model server. That is
+      // what iOS requires: it forbids child processes outright, and every
+      // piece of the old design depended on one.
 
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|handle, event| {
+      // Release both models before the process tears down — see Loaded.
+      if matches!(event, tauri::RunEvent::Exit) {
+        use tauri::Manager;
+        handle.state::<agent::Model>().0.release();
+        handle.state::<agent::AppEmbedder>().0.release();
+      }
+    });
 }
