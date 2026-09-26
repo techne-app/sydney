@@ -1,9 +1,8 @@
 //! The agent, in Tauri core.
 //!
-//! Replaces `sidecar/agent.py`. The model still runs in llama-server on :8081 —
-//! only the agent framework moved, ADK to Rig. The corpus and search still live
-//! in the Python sidecar, so the tools below reach them over HTTP the way the
-//! frontend already does; #48 removes that hop.
+//! Replaces `sidecar/agent.py`. The model still runs in llama-server on :8081;
+//! everything else — the agent, the corpus, search — is in this process now.
+//! The tools below call Rust directly rather than crossing HTTP to Python.
 //!
 //! The problem the agent solves is unchanged: the model calls a tool, sees the
 //! result, and decides again. Routing used to give it one tool call per turn and
@@ -20,8 +19,6 @@ use rig_core::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// Where the Python sidecar still serves the corpus. Removed by #48.
-const SIDECAR_URL: &str = "http://localhost:8000";
 /// The inference server. Replaced by in-process llama-cpp-2 in #47.
 const LLAMA_SERVER_URL: &str = "http://localhost:8081";
 
@@ -114,7 +111,8 @@ pub struct SearchArgs {
 }
 
 struct SearchThreads {
-    http: reqwest::Client,
+    corpus: Arc<crate::corpus::Corpus>,
+    embedder: Arc<crate::search::Embedder>,
     collected: Shared,
 }
 
@@ -147,16 +145,7 @@ impl Tool for SearchThreads {
             arguments: json!({ "keyword_filter": args.keyword_filter }),
         });
 
-        let body = self
-            .http
-            .post(format!("{SIDECAR_URL}/search"))
-            .json(&json!({ "query": args.keyword_filter, "limit": 3 }))
-            .send()
-            .await
-            .map_err(|e| ToolFailed(e.to_string()))?
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| ToolFailed(e.to_string()))?;
+        let body = crate::search::run_search(&self.corpus, &self.embedder, &args.keyword_filter, 3).await;
 
         // Search lists options; get_thread is how you explore one. A hit carries
         // neither the summary nor a link — that is what stops the UI appending a
@@ -175,7 +164,7 @@ pub struct ThreadArgs {
 }
 
 struct GetThread {
-    http: reqwest::Client,
+    corpus: Arc<crate::corpus::Corpus>,
     collected: Shared,
 }
 
@@ -212,36 +201,26 @@ impl Tool for GetThread {
             arguments: json!({ "thread_id": args.thread_id }),
         });
 
-        let mut body = self
-            .http
-            .get(format!("{SIDECAR_URL}/thread/{}", args.thread_id))
-            .send()
-            .await
-            .map_err(|e| ToolFailed(e.to_string()))?
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| ToolFailed(e.to_string()))?;
+        let Some(meta) = self.corpus.get(args.thread_id) else {
+            return Ok(serde_json::json!({
+                "error": "No thread with that id is in the last 30 days of data. \
+                          Search for the topic instead."
+            }));
+        };
 
         // The link is split off here and never handed to the model. Given a URL
         // it writes it into its prose, and the UI renders the same link again
         // from `results`. Taking it out is what makes that impossible rather
         // than merely discouraged.
-        if let Some(link) = body.get("link").and_then(|v| v.as_str()).map(str::to_string) {
-            let title = body
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
+        if let Some(link) = meta.anchor.clone() {
             self.collected.lock().unwrap().results.push(UiResult {
-                thread_id: args.thread_id,
-                title,
+                thread_id: meta.thread_id,
+                title: meta.story_title.clone().unwrap_or_default(),
                 link,
             });
         }
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("link");
-        }
 
+        let body = crate::corpus::public_view(&meta, true);
         Ok(body)
     }
 }
@@ -250,8 +229,11 @@ impl Tool for GetThread {
 // The command the frontend calls
 // ---------------------------------------------------------------------------
 
-/// The durable store Rig loads from and appends to. Built once at startup.
+/// Built once at startup and shared by every turn. The embedder in particular
+/// must not be rebuilt per request — it loads a model from disk.
 pub struct AgentMemory(pub Arc<crate::memory::SqliteConversationMemory>);
+pub struct AppCorpus(pub Arc<crate::corpus::Corpus>);
+pub struct AppEmbedder(pub Arc<crate::search::Embedder>);
 
 #[derive(Debug, Default, Serialize)]
 pub struct AgentReply {
@@ -289,17 +271,29 @@ async fn llama_server_ready(http: &reqwest::Client) -> bool {
 #[tauri::command]
 pub async fn send_message(
     memory: tauri::State<'_, AgentMemory>,
+    corpus: tauri::State<'_, AppCorpus>,
+    embedder: tauri::State<'_, AppEmbedder>,
     session_id: String,
     message: String,
     pinned_thread: Option<PinnedThread>,
 ) -> Result<AgentReply, String> {
-    Ok(run_turn(memory.0.clone(), session_id, message, pinned_thread).await)
+    Ok(run_turn(
+        memory.0.clone(),
+        corpus.0.clone(),
+        embedder.0.clone(),
+        session_id,
+        message,
+        pinned_thread,
+    )
+    .await)
 }
 
 /// One turn, with no Tauri in sight, so the check runner can drive the real
 /// agent rather than a copy of it that might drift.
 pub async fn run_turn(
     memory: Arc<crate::memory::SqliteConversationMemory>,
+    corpus: Arc<crate::corpus::Corpus>,
+    embedder: Arc<crate::search::Embedder>,
     session_id: String,
     message: String,
     pinned_thread: Option<PinnedThread>,
@@ -328,11 +322,12 @@ pub async fn run_turn(
     let agent = AgentBuilder::new(model)
         .preamble(BASE_INSTRUCTION)
         .tool(SearchThreads {
-            http: http.clone(),
+            corpus: corpus.clone(),
+            embedder,
             collected: collected.clone(),
         })
         .tool(GetThread {
-            http,
+            corpus,
             collected: collected.clone(),
         })
         // Rig runs ONE model call by default, so without this any tool use dies

@@ -1,8 +1,9 @@
 pub mod agent;
+pub mod corpus;
 pub mod memory;
+pub mod search;
 
 use tauri::Manager;
-use tauri_plugin_shell::ShellExt;
 
 // Unused since external links moved to tauri-plugin-shell's own handler (it
 // already intercepts target="_blank" clicks; ours ran alongside it and the
@@ -17,10 +18,19 @@ fn open_external_url(url: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-  //import the plugin to allow us to spawn the sidecar
     .plugin(tauri_plugin_shell::init())
     .manage(agent::AgentMemory(std::sync::Arc::new(
       memory::SqliteConversationMemory::open().expect("failed to open agent memory"),
+    )))
+    .manage(agent::AppCorpus({
+      // Loads the cache, then refreshes in the background — the UI has plenty
+      // to show before search is needed.
+      let corpus = std::sync::Arc::new(corpus::Corpus::new());
+      corpus::start(corpus.clone());
+      corpus
+    }))
+    .manage(agent::AppEmbedder(std::sync::Arc::new(
+      search::Embedder::load().expect("failed to load the embedding model"),
     )))
     .invoke_handler(tauri::generate_handler![open_external_url, agent::send_message])
     .setup(|app| {
@@ -32,7 +42,7 @@ pub fn run() {
         )?;
       }
 
-      // Auto-start the model server and Python sidecar, production only.
+      // Auto-start the model server, production only.
       // In dev, run both by hand for fast iteration — see README.
       if !cfg!(debug_assertions) {
         // llama-server is NOT an externalBin: it resolves eight dylibs via
@@ -66,12 +76,9 @@ pub fn run() {
           .spawn()
           .expect("failed to start llama-server");
 
-        // The sidecar starts immediately rather than waiting for the model to
-        // load. It only needs llama-server when a request reaches Gemma, and
-        // that is minutes away — the webview has to render and the user has to
-        // type. /health reports `llama_server` so the state is visible.
-        let sidecar = app.shell().sidecar("sidecar").expect("sidecar not found");
-        sidecar.spawn().expect("failed to start sidecar");
+        // No Python sidecar any more: the corpus, search and the agent all run
+        // in this process (#48). Only the model server is still spawned, and #47
+        // removes that too.
       }
 
       Ok(())

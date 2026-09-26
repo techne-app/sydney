@@ -15,7 +15,9 @@
 use std::sync::Arc;
 
 use app_lib::agent::{run_turn, AgentReply, PinnedThread};
+use app_lib::corpus::Corpus;
 use app_lib::memory::SqliteConversationMemory;
+use app_lib::search::Embedder;
 
 /// A throwaway store, so a run cannot pollute real conversations.
 fn scratch_memory() -> Arc<SqliteConversationMemory> {
@@ -75,14 +77,22 @@ fn tools(reply: &AgentReply) -> Vec<&str> {
 #[tokio::main]
 async fn main() {
     let memory = scratch_memory();
+
+    let corpus = Arc::new(Corpus::new());
+    if !corpus.load_cached() {
+        println!("(no corpus cache, fetching — ~45s)");
+        corpus.refresh().await;
+    }
+    let embedder = Arc::new(Embedder::load().expect("load embedding model"));
+
     let mut report = Report { failures: vec![] };
 
     macro_rules! turn {
         ($sid:expr, $msg:expr) => {
-            run_turn(memory.clone(), $sid.to_string(), $msg.to_string(), None).await
+            run_turn(memory.clone(), corpus.clone(), embedder.clone(), $sid.to_string(), $msg.to_string(), None).await
         };
         ($sid:expr, $msg:expr, $pin:expr) => {
-            run_turn(memory.clone(), $sid.to_string(), $msg.to_string(), Some($pin)).await
+            run_turn(memory.clone(), corpus.clone(), embedder.clone(), $sid.to_string(), $msg.to_string(), Some($pin)).await
         };
     }
 
