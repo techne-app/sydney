@@ -28,9 +28,24 @@ log = "0.4"
 tauri = { version = "2.10.0", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
-rig-core = "0.42"
-rig-agent = "0.42"
+# Pinned to 0.40, not the newest 0.42, because rig-llama-cpp (#47's route to
+# running Gemma in-process) only ever targets ^0.40 — and rig-agent, where the
+# agent lives from 0.41 on, does not exist below it. 0.40 keeps the agent inside
+# rig-core and has everything we use. Verified by spike: tool calls come back
+# structured from an in-process Gemma.
+rig-core = "0.40"
 thiserror = "2.0.20"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+base64 = "0.23.1"
+chrono = "0.4.45"
+# llama.cpp in-process, for nomic embeddings (and Gemma in #47). Needs `cmake`
+# on the build machine.
+#
+# llama-cpp-2 and llama-cpp-sys-2 are PINNED to 0.1.152 in Cargo.lock: that crate
+# ships breaking API changes in patch releases (0.1.157 changed penalties() from
+# 4 args to 5), and Cargo treats 0.1.x as compatible, so it will happily pick one
+# rig-llama-cpp was not written against. If this stops compiling after a
+# `cargo update`, that is why — re-pin rather than patching around it.
+rig-llama-cpp = "0.5"

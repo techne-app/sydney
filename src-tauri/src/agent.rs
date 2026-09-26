@@ -12,10 +12,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use rig_agent::agent::AgentBuilder;
-use rig_agent::prelude::*;
-use rig_agent::tool::{Tool, ToolContext};
+use rig_core::agent::AgentBuilder;
+use rig_core::client::CompletionClient;
+use rig_core::completion::Prompt;
 use rig_core::providers::llamafile;
+use rig_core::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -140,11 +141,7 @@ impl Tool for SearchThreads {
         })
     }
 
-    async fn call(
-        &self,
-        _ctx: &mut ToolContext,
-        args: Self::Args,
-    ) -> Result<Self::Output, Self::Error> {
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         self.collected.lock().unwrap().tool_calls.push(ToolCallRecord {
             name: Self::NAME.into(),
             arguments: json!({ "keyword_filter": args.keyword_filter }),
@@ -209,11 +206,7 @@ impl Tool for GetThread {
         })
     }
 
-    async fn call(
-        &self,
-        _ctx: &mut ToolContext,
-        args: Self::Args,
-    ) -> Result<Self::Output, Self::Error> {
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         self.collected.lock().unwrap().tool_calls.push(ToolCallRecord {
             name: Self::NAME.into(),
             arguments: json!({ "thread_id": args.thread_id }),
