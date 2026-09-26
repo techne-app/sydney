@@ -15,11 +15,12 @@ xcode-select --install
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-**Step 3 — Node.js and UV**
+**Step 3 — Node.js and cmake**
+
+cmake is required: llama.cpp is compiled into the app for the embedding model.
+
 ```bash
-brew install node
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+brew install node cmake
 ```
 
 **Step 4 — Rust**
@@ -77,14 +78,14 @@ Run the model server and Python sidecar from source — no compilation needed,
 fast iteration. In production Tauri starts both for you; in dev you start them
 by hand.
 
-Open three terminal windows.
+Open two terminal windows. (It used to be three — the Python sidecar is gone;
+the corpus, search and the agent all run inside the app now.)
 
-First check both ports are free — **quitting the packaged app does not always
-stop its llama-server and sidecar**, and leftovers make the commands below fail
-to bind:
+First check the port is free — **quitting the packaged app does not always stop
+its llama-server**, and a leftover makes the command below fail to bind:
 
 ```bash
-lsof -ti :8081 :8000    # kill anything listed, then continue
+lsof -ti :8081    # kill anything listed, then continue
 ```
 
 **Terminal 1 — Start the model server**
@@ -97,21 +98,13 @@ lsof -ti :8081 :8000    # kill anything listed, then continue
 ```
 `--jinja` is not optional. It applies Gemma's own chat template so tool calls
 come back as a structured `tool_calls` field. Without it they arrive as raw
-`<|tool_call>` text, the sidecar sees no tool call, and search and summarize
-silently stop working while chat still looks fine.
+`<|tool_call>` text, the agent sees no tool call, and search silently stops
+working while chat still looks fine.
 
 Takes a minute or two to load 12GB. Ready when `curl 127.0.0.1:8081/health`
 returns OK.
 
-**Terminal 2 — Start the Python sidecar**
-```bash
-cd sidecar
-uv run main.py
-```
-Starts in seconds — it only loads nomic (139MB). Gemma lives in llama-server.
-`curl localhost:8000/health` reports `llama_server: true` once both are up.
-
-**Terminal 3 — Start the app**
+**Terminal 2 — Start the app**
 ```bash
 npm run tauri:dev
 ```
@@ -120,48 +113,7 @@ npm run tauri:dev
 
 Creates a standalone `.dmg` installer that bundles the app, sidecar binary, and AI model.
 
-**Step 8 — Compile the Python sidecar with Nuitka** *(rerun after **any** change under `sidecar/`)*
-
-```bash
-cd sidecar
-uv run python -m nuitka --onefile \
-  --output-filename=sidecar-aarch64-apple-darwin \
-  --include-package-data=certifi \
-  --include-package-data=llama_cpp \
-  --assume-yes-for-downloads \
-  main.py
-mkdir -p ../src-tauri/binaries
-mv sidecar-aarch64-apple-darwin ../src-tauri/binaries/
-cd ..
-```
-
-**Not yet re-verified since the agent moved to Rust.** The sidecar used to
-carry `google-adk` and `litellm`, which needed a dozen extra `--include-*` flags
-and made this step take ~70 minutes — one generated file, `google.genai.types`,
-was 65 of them. Those dependencies are gone, so the flag list above is back to
-the two that predate them and the build should be far quicker. Confirm by
-running the compiled binary before trusting a bundle.
-
-Nuitka compiles ahead of time and finds modules by reading `import` statements,
-so anything resolved from a runtime *string* is invisible to it and missing
-**only in the compiled binary** — never under `uv run`. If the binary dies with
-`ModuleNotFoundError` while dev works fine, that is the cause, and the fix is
-another `--include-package`.
-
-**Then run the compiled binary before bundling** — a stale or broken binary is
-otherwise invisible until the app is installed. It finds models relative to its
-own directory, so mirror the production layout:
-
-```bash
-mkdir -p src-tauri/Resources && ln -sfn ../../sidecar/models src-tauri/Resources/models
-./src-tauri/binaries/sidecar-aarch64-apple-darwin
-rm -rf src-tauri/Resources   # Tauri builds its own
-```
-
-Healthy startup prints `Embedding model loaded.`, `[agent] sessions at ...`, and
-a corpus line. Ctrl+C when you've seen them.
-
-**Step 9 — Build**
+**Step 8 — Build**
 
 ```bash
 npm run tauri:build
