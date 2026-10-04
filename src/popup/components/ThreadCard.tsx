@@ -27,6 +27,10 @@ interface ThreadCardProps extends ThreadCardData {
   className?: string;
   style?: React.CSSProperties;
   onClick?: () => void;
+  /** Shown in place of the summary when the card has none, as an invitation to
+   *  generate one. The sidebar passes `summary=""` deliberately — a full summary
+   *  does not fit a 260px card — so without this the slot is simply empty. */
+  onSummarize?: () => void;
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent<HTMLDivElement>, data: ThreadCardData) => void;
 }
@@ -52,7 +56,24 @@ const Card: React.FC<{
 );
 
 // Simple local Tag component matching landing page styling exactly
-const Tag: React.FC<{ label: string }> = ({ label }) => (
+/** Shared with ThreadSummaryModal so the two read identically. */
+export const formatTimeAgo = (timestamp: string) => {
+  const now = new Date();
+  // Ensure timestamp is treated as UTC by appending 'Z' if not present
+  const utcTimestamp = timestamp.endsWith('Z') ? timestamp : timestamp + 'Z';
+  const past = new Date(utcTimestamp);
+  const diffMs = now.getTime() - past.getTime();
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMins < 1) return 'now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${diffDays}d ago`;
+  };
+
+export const Tag: React.FC<{ label: string }> = ({ label }) => (
   <span 
     className="text-[11px] tracking-wide uppercase font-semibold rounded px-2 py-1 text-white transition-all duration-500 bg-[#ff6600]"
     style={{
@@ -62,6 +83,54 @@ const Tag: React.FC<{ label: string }> = ({ label }) => (
   >
     {label}
   </span>
+);
+
+/**
+ * The link out to the HN discussion, and the one place that records the visit.
+ *
+ * It must be shared rather than copied. The global click interceptor in
+ * chrome-shim records any HN thread link the user opens, and for a link that
+ * does not record itself it has nothing to label the visit with but the link's
+ * own text — so Memory fills with rows called "Join the thread - 10 comments".
+ * `data-visit-recorded` is what tells the interceptor to stand back and let the
+ * theme be stored instead. A second copy of this markup elsewhere silently
+ * loses that, which is exactly what happened to the summary modal.
+ */
+export const JoinThreadLink: React.FC<{
+  anchor: string;
+  theme: string;
+  comment_count: number;
+  /** The card flashes this link orange when a thread is dropped onto the chat. */
+  highlight?: boolean;
+}> = ({ anchor, theme, comment_count, highlight = false }) => (
+  <a
+    href={anchor}
+    target="_blank"
+    rel="noopener noreferrer"
+    className="flex items-center gap-1 text-[#0066cc] hover:underline"
+    data-visit-recorded="true"
+    onClick={() => {
+      // No preventDefault: the link still opens, this only records the visit.
+      const msg: NewTagRequest = {
+        type: MessageType.NEW_TAG,
+        data: { tag: theme, type: 'visited_thread', anchor },
+      };
+      chrome.runtime.sendMessage(msg).catch(() => {
+        logger.debug('No listeners for NEW_TAG message, this is expected');
+      });
+    }}
+  >
+    <MessageCircle
+      className={`w-3 h-3 transition-all duration-500 ${highlight ? 'text-[#ff6600] animate-pulse' : ''}`}
+    />
+    <span
+      className={`transition-all duration-500 ${
+        highlight ? 'text-[#ff6600] font-medium bg-orange-50/50 px-1 rounded-sm' : ''
+      }`}
+    >
+      Join the thread - {comment_count} comments
+    </span>
+  </a>
 );
 
 export const ThreadCard: React.FC<ThreadCardProps> = ({ 
@@ -80,6 +149,7 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
   className = "",
   style = {},
   onClick,
+  onSummarize,
   draggable = false,
   onDragStart,
   ...threadData
@@ -121,40 +191,6 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
     };
   }, []);
   
-  const formatTimeAgo = (timestamp: string) => {
-    const now = new Date();
-    // Ensure timestamp is treated as UTC by appending 'Z' if not present
-    const utcTimestamp = timestamp.endsWith('Z') ? timestamp : timestamp + 'Z';
-    const past = new Date(utcTimestamp);
-    const diffMs = now.getTime() - past.getTime();
-    const diffMins = Math.floor(diffMs / (1000 * 60));
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-    if (diffMins < 1) return 'now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    return `${diffDays}d ago`;
-  };
-
-  // Handle click on "Join the thread" link
-  const handleThreadClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
-    // Don't prevent default - let the link open
-    // But track the visit in memory
-    const msg: NewTagRequest = {
-      type: MessageType.NEW_TAG,
-      data: {
-        tag: theme, // Use the theme as the tag name
-        type: 'visited_thread', // Special type for visited threads
-        anchor: anchor // The HN thread URL
-      }
-    };
-    
-    chrome.runtime.sendMessage(msg).catch((error) => {
-      logger.debug('No listeners for NEW_TAG message, this is expected');
-    });
-  };
-
   // Handle drag start
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
     if (onDragStart) {
@@ -211,6 +247,29 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
             </h2>
           </div>
 
+          {/* Offered where the summary would be, so it reads as the thing that
+              fills this space. Stops propagation because the card itself may be
+              draggable or clickable. */}
+          {!summary && onSummarize && (
+            <div className="flex-1 mb-4 text-center">
+              <button
+                // The card is draggable, and a mousedown anywhere inside it starts a
+                // drag, which swallows the click. Both lines are needed: the attribute
+                // opts this element out of dragging, and stopping mousedown keeps the
+                // parent from claiming the gesture first.
+                draggable={false}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSummarize();
+                }}
+                className="text-sm underline hover:no-underline"
+                style={{ color: 'var(--hn-link, #0066cc)' }}
+              >
+                What are people saying?
+              </button>
+            </div>
+          )}
           {/* Summary - only show if provided */}
           {summary && (
             <div className="flex-1 mb-4">
@@ -222,29 +281,12 @@ export const ThreadCard: React.FC<ThreadCardProps> = ({
 
           {/* Metrics Row */}
           <div className="mb-3 flex justify-center text-xs font-mono">
-            {/* data-visit-recorded: handleThreadClick already stores the visit,
-                using the theme as the label. This tells the global click
-                interceptor in chrome-shim to skip the link rather than storing
-                it again from the link text ("Join the thread - N comments"). */}
-            <a
-              href={anchor}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 text-[#0066cc] hover:underline"
-              onClick={handleThreadClick}
-              data-visit-recorded="true"
-            >
-              <MessageCircle className={`w-3 h-3 transition-all duration-500 ${
-                isAnimating ? 'text-[#ff6600] animate-pulse' : ''
-              }`} />
-              <span className={`transition-all duration-500 ${
-                isAnimating 
-                  ? 'text-[#ff6600] font-medium bg-orange-50/50 px-1 rounded-sm' 
-                  : ''
-              }`}>
-                Join the thread - {comment_count} comments
-              </span>
-            </a>
+            <JoinThreadLink
+              anchor={anchor}
+              theme={theme}
+              comment_count={comment_count}
+              highlight={isAnimating}
+            />
           </div>
 
           {/* Divider */}

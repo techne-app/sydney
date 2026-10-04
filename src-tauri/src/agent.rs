@@ -26,6 +26,18 @@ const CHAT_MODEL: &str = "google_gemma-4-26B-A4B-it-Q3_K_M.gguf";
 /// Gemma's own template is applied by rig-llama-cpp, which also parses the
 /// `<|tool>` markers back into structured tool calls. That is the work
 /// `llama-server --jinja` used to do for us over HTTP.
+///
+/// One window, shared by everything: the agent's turns, the reranker's 100
+/// candidates, and a whole HN thread to summarise. The last of those sets the
+/// size — a busy thread runs to 196,000 characters, which 8,192 tokens cannot
+/// hold. Gemma is trained to 262,144.
+///
+/// 8× the window costs about 1.1 GB, not 8× the memory: Gemma uses sliding-
+/// window attention on 25 of its 30 layers, and that cache is a fixed 4,608
+/// cells however large the context. Only the 5 full-attention layers scale.
+/// Measured: 13.7 GB resident at 8,192, 14.9 GB at 65,536, on a 24 GB machine.
+/// That arithmetic will not survive a phone, so iOS will have to size this
+/// again from scratch.
 const N_CTX: u32 = 8192;
 
 /// Carried over verbatim from agent.py. The "or links" clause is load-bearing:
@@ -266,6 +278,9 @@ impl<T> Loaded<T> {
     /// release simply waits for that clone to go — never mid-generation.
     pub fn release(&self) {
         if let Ok(mut slot) = self.0.write() {
+            // Taking our Arc frees the value only if nobody else holds a clone.
+            // A turn still in flight keeps its own, which is what stops a model
+            // being freed mid-generation.
             slot.take();
         }
     }
