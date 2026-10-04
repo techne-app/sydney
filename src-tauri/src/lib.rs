@@ -2,6 +2,7 @@ pub mod agent;
 pub mod corpus;
 pub mod memory;
 pub mod search;
+pub mod summary;
 
 
 // Unused since external links moved to tauri-plugin-shell's own handler (it
@@ -36,7 +37,11 @@ pub fn run() {
     .manage(agent::Model(agent::Loaded::new(
       agent::load_model().expect("failed to load the chat model"),
     )))
-    .invoke_handler(tauri::generate_handler![open_external_url, agent::send_message])
+    .invoke_handler(tauri::generate_handler![
+      open_external_url,
+      agent::send_message,
+      summary::summarize_thread_command
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

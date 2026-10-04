@@ -12,6 +12,7 @@ import { Modal } from './Modal';
 import { ActivityPage } from './ActivityPage';
 import { SettingsPage } from './SettingsPage';
 import { ThreadCard } from './ThreadCard';
+import { ThreadSummaryModal } from './ThreadSummaryModal';
 import { MessageCircle, ExternalLink } from 'lucide-react';
 
 
@@ -53,6 +54,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [contextThreads, setContextThreads] = useState<ThreadCardData[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [pinnedCard, setPinnedCard] = useState<ThreadCardData | null>(null);
+  /** The card whose summary is open, or null. Summaries are generated on
+   *  demand, so this is also what tells the modal which thread to read. */
+  const [summarizingThread, setSummarizingThread] = useState<ThreadCardData | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Load pinned thread when active conversation changes
@@ -463,6 +467,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         fontSize: '11px'
                       }}
                       summary=""
+                      onSummarize={() => setSummarizingThread(thread)}
                       draggable={true}
                       onDragStart={(e) => handleDragStart(e, thread)}
                     />
@@ -748,6 +753,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     >
       <SettingsPage />
     </Modal>
+
+      {/* Thread summary — opened by "What are people saying?" on a sidebar card.
+          The thread is null when closed, which is also what stops the request. */}
+      <ThreadSummaryModal
+        thread={summarizingThread}
+        onClose={() => setSummarizingThread(null)}
+      />
     </>
   );
 };
