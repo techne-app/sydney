@@ -51,54 +51,49 @@ The version script automatically updates both `package.json` and `public/manifes
 
 ## Tauri Desktop App
 
-This repo also contains a Tauri v2 desktop app (separate from the Chrome extension). It wraps the same React frontend and runs a Python sidecar for local AI inference.
+This repo also contains a Tauri v2 desktop app (separate from the Chrome extension). It wraps the same React frontend; the agent, corpus, search and both AI models run in-process in Rust. There is no Python sidecar and no model server. `README.md` has the full setup steps.
 
 ### Architecture
 - **Frontend**: Same React/Vite app, built to `dist-tauri/` (via `npm run vite:build`)
-- **Rust shell**: `src-tauri/` — Tauri v2 app shell
-- **Python sidecar**: `sidecar/` — runs via `uv` in dev, compiled with Nuitka for production
-- **AI model**: `sidecar/models/Qwen3-4B-Q4_K_M.gguf` (2.4GB) — single copy, used by both dev and build
+- **Rust core**: `src-tauri/` — Tauri v2 app; agent (`agent.rs`, built on Rig), corpus (`corpus.rs`), search (`search.rs`), thread summaries (`summary.rs`)
+- **Inference**: llama.cpp compiled into the app via `llama-cpp-sys-2` (needs `cmake`)
+- **AI models** (in `sidecar/models/`, git-ignored, downloaded per `README.md`):
+  - `google_gemma-4-26B-A4B-it-Q3_K_M.gguf` (~12GB) — chat + rerank (`CHAT_MODEL` in `agent.rs`)
+  - `nomic-embed-text-v1.5.Q8_0.gguf` (~139MB) — search query embeddings (`EMBED_MODEL` in `search.rs`); must match the model that produced the backend's vectors
 
-### Sidecar Behavior: Dev vs Production
-The sidecar auto-start in `src-tauri/src/lib.rs` is gated by `cfg!(debug_assertions)`:
-- **Dev mode** (`tauri:dev`): sidecar does NOT auto-start. Run `uv run main.py` manually in a separate terminal first. No Nuitka compilation needed — fast iteration on Python code.
-- **Production** (`tauri:build`): sidecar auto-starts from the compiled Nuitka binary bundled in the `.app`.
-
-### Model Path Resolution (`sidecar/main.py`)
-The model is stored once at `sidecar/models/`. The sidecar finds it via two paths:
-- **Production**: `Contents/Resources/models/` — Tauri bundles it there from `sidecar/models/` via the `resources` config in `tauri.conf.json`
-- **Dev**: `sidecar/models/` — `uv run main.py` runs from `sidecar/`, finds it directly
+### Model Path Resolution (`src-tauri/src/search.rs`)
+- **Production**: `Contents/Resources/models/` — bundled from `sidecar/models/` via `bundle.resources` in `tauri.conf.json`
+- **Dev**: walks up from the executable until it finds `sidecar/models/`
 
 ### Build Commands
 ```bash
-npm run tauri:dev     # Dev mode — run `uv run main.py` in separate terminal first
-npm run tauri:build   # Production build → .app + .dmg (requires compiled sidecar binary)
+npm run tauri:dev     # Dev mode — nothing else to start
+npm run tauri:build   # Production build → .app + .dmg
 ```
 
-### Distributing to Users
-The `.dmg` is the file to send. Users open it, drag the app into Applications, done.
+Outputs:
+- `src-tauri/target/release/bundle/macos/Techne Navigator.app` — run directly to test
+- `src-tauri/target/release/bundle/dmg/Techne Navigator_0.1.0_aarch64.dmg` — the file to distribute
 
-Current build is `aarch64` (Apple Silicon only). For a universal binary (Apple Silicon + Intel):
+Build is `aarch64` (Apple Silicon only).
+
+### macOS Deployment Target
+`bundle.macOS.minimumSystemVersion` in `tauri.conf.json` must stay at `11.0` or higher. Tauri otherwise defaults `MACOSX_DEPLOYMENT_TARGET` to 10.13, and llama.cpp fails to compile (`'path' is unavailable: introduced in macOS 10.15`).
+
+If a build already failed this way, the stale CMake cache keeps the old target even after the config is fixed. Clear it:
 ```bash
-cargo tauri build --target universal-apple-darwin
+cd src-tauri && cargo clean --release -p llama-cpp-sys-2
 ```
 
-### macOS Build Requirement: Automation Permission
-`npm run tauri:build` will silently fail during DMG creation unless the terminal has permission to control Finder.
+### DMG Build Failures
+During `tauri:build` a Finder window opens showing the mounted disk image. Leave it alone until the build says `Finished` — touching it (or launching the `.app` mid-build) holds the image open and fails the build with `error running bundle_dmg.sh`.
 
-**Symptom**: Build succeeds for `.app` but fails with `error running bundle_dmg.sh` and leaves orphaned `rw.*.dmg` files in `src-tauri/target/release/bundle/macos/`.
-
-**Root cause**: Tauri's DMG bundler runs an AppleScript to position icons in the installer window. macOS blocks this with error `-1743` if Automation permission is missing.
-
-**Fix**: System Settings → Privacy & Security → Automation → find your terminal → enable the Finder checkbox.
-
-**If orphaned files accumulate**:
+To recover, detach the image and delete the scratch files before rebuilding — a leftover `rw.*.dmg` in `bundle/macos/` ends up inside the shipped dmg:
 ```bash
+hdiutil detach /Volumes/dmg.* -force 2>/dev/null
 rm -f src-tauri/target/release/bundle/macos/rw.*.dmg
+npm run tauri:build
 ```
-
-### Python Sidecar (UV)
-The sidecar uses `uv` for dependency management. See `sidecar/pyproject.toml` for dependencies. The compiled Nuitka binary must exist at `src-tauri/binaries/sidecar-aarch64-apple-darwin` before running `tauri:build`.
 
 ## Testing Infrastructure
 
