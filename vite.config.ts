@@ -13,7 +13,6 @@ export default defineConfig({
     strictPort: true,
   },
   optimizeDeps: {
-    exclude: ["@mlc-ai/web-llm", "@huggingface/transformers", "onnxruntime-web"],
     entries: ["index.html"],
   },
 });

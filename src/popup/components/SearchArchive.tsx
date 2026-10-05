@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { contextDb, type Search } from '../../background/contextDb';
-import { MessageType } from '../../types/messages';
+import { contextDb, type Search } from '../../utils/contextDb';
+import { onActivity } from '../../utils/activity';
 import { MemoryCard } from './MemoryCard';
 import { logger } from '../../utils/logger';
 
@@ -48,20 +48,9 @@ export const SearchArchive: React.FC = () => {
   useEffect(() => {
     loadSearches();
 
-    // Define the message listener function
-    const handleMessage = (message: any) => {
-      if (message.type === MessageType.SEARCHES_UPDATED) {
-        loadSearches();
-      }
-    };
-
-    // Add the listener
-    chrome.runtime.onMessage.addListener(handleMessage);
-
-    // Clean up the listener when component unmounts
-    return () => {
-      chrome.runtime.onMessage.removeListener(handleMessage);
-    };
+    return onActivity(kind => {
+      if (kind === 'searches') loadSearches();
+    });
   }, []);
 
   return (

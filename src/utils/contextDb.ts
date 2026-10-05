@@ -77,18 +77,7 @@ class ContextDB extends Dexie {
     await this.tags.delete(id);
   }
 
-  async getRecentTags(k: number): Promise<Tag[]> {
-    return await this.tags
-      .orderBy('timestamp')
-      .reverse()
-      .limit(k)
-      .toArray();
-  }
 
-  // Search-related methods
-  async getAllSearches(): Promise<Search[]> {
-    return await this.searches.toArray();
-  }
 
   async storeSearch(query: string): Promise<number> {
     // Same rule as visited threads: repeating a search moves it to the top
@@ -123,7 +112,7 @@ class ContextDB extends Dexie {
       .toArray();
   }
 
-  // Settings-related methods
+
   async getSetting(key: string): Promise<UserSetting | undefined> {
     return await this.settings.get(key);
   }
@@ -141,17 +130,7 @@ class ContextDB extends Dexie {
     });
   }
 
-  async getAllSettings(): Promise<UserSetting[]> {
-    return await this.settings.toArray();
-  }
 
-  async getRecentSettings(k: number): Promise<UserSetting[]> {
-    return await this.settings
-      .orderBy('timestamp')
-      .reverse()
-      .limit(k)
-      .toArray();
-  }
 
   // Conversation-related methods
   async getAllConversations(): Promise<Conversation[]> {
@@ -165,9 +144,6 @@ class ContextDB extends Dexie {
     return await this.conversations.get(id);
   }
 
-  async saveConversation(conversation: Conversation): Promise<void> {
-    await this.conversations.put(conversation);
-  }
 
   async createConversation(title: string, model: string, modelDisplayName: string): Promise<Conversation> {
     const conversation: Conversation = {
@@ -226,9 +202,6 @@ class ContextDB extends Dexie {
     }
   }
 
-  async clearConversations(): Promise<void> {
-    await this.conversations.clear();
-  }
 }
 
 // Define the UserSetting interface

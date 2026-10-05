@@ -316,13 +316,17 @@ impl<T> Loaded<T> {
         self.0.read().ok().and_then(|slot| slot.clone())
     }
 
-    /// Drop the value now. A turn still in flight holds its own Arc, so the
-    /// release simply waits for that clone to go — never mid-generation.
+    /// Drop our handle to the value.
+    ///
+    /// This frees the model only if nothing else holds a clone — a turn or a
+    /// summary still running keeps its own, and must, because freeing a model
+    /// out from under a generation in progress is a use-after-free during the
+    /// user's work rather than a message after it.
+    ///
+    /// So this is best-effort, and `lib.rs` does not depend on it succeeding:
+    /// it exits in a way that does not run the destructor that would complain.
     pub fn release(&self) {
         if let Ok(mut slot) = self.0.write() {
-            // Taking our Arc frees the value only if nobody else holds a clone.
-            // A turn still in flight keeps its own, which is what stops a model
-            // being freed mid-generation.
             slot.take();
         }
     }

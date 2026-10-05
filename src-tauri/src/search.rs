@@ -32,7 +32,7 @@ const RERANK_CANDIDATES: usize = 100;
 /// Production is one fixed hop from the executable. Dev is not: `cargo run`,
 /// `cargo run --bin check` and `tauri dev` all sit at different depths under
 /// target/, so counting `..` gets it wrong for at least one of them. Walking up
-/// until `sidecar/models` appears works from all of them.
+/// until `models/` appears works from all of them.
 pub fn resolve_model(name: &str) -> String {
     let exe = std::env::current_exe().unwrap_or_default();
     let base = exe.parent().unwrap_or(std::path::Path::new("."));
@@ -43,8 +43,17 @@ pub fn resolve_model(name: &str) -> String {
         return bundled.to_string_lossy().into_owned();
     }
 
+    // Dev: walk up to the repo's own `models/`. Build directories are skipped
+    // deliberately — Tauri copies `bundle.resources` to `target/debug/models/`,
+    // which sits directly beside the dev binary and would otherwise win every
+    // time. It holds the same weights today, but it is a build artifact: it
+    // survives a change to tauri.conf.json, and still has a Qwen3 from before
+    // the Gemma swap. Loading the source is the one that is always current.
     for dir in base.ancestors() {
-        let candidate = dir.join("sidecar/models").join(name);
+        if dir.components().any(|c| c.as_os_str() == "target") {
+            continue;
+        }
+        let candidate = dir.join("models").join(name);
         if candidate.exists() {
             return candidate.to_string_lossy().into_owned();
         }

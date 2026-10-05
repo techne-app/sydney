@@ -49,15 +49,15 @@ interchangeable — it must be the model that produced the vectors stored in the
 backend, or search returns noise rather than weak matches.
 
 ```bash
-mkdir -p sidecar/models
+mkdir -p models
 
 # Chat + rerank (~12GB) — from bartowski/google_gemma-4-26B-A4B-it-GGUF
 curl -L "https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF/resolve/main/google_gemma-4-26B-A4B-it-Q3_K_M.gguf" \
-  -o sidecar/models/google_gemma-4-26B-A4B-it-Q3_K_M.gguf
+  -o models/google_gemma-4-26B-A4B-it-Q3_K_M.gguf
 
 # Search query embeddings (~139MB)
 curl -L "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf" \
-  -o sidecar/models/nomic-embed-text-v1.5.Q8_0.gguf
+  -o models/nomic-embed-text-v1.5.Q8_0.gguf
 ```
 
 Both filenames appear in `src-tauri/tauri.conf.json` (`bundle.resources`) and

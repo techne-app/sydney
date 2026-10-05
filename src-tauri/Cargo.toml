@@ -49,3 +49,6 @@ chrono = "0.4.45"
 # rig-llama-cpp was not written against. If this stops compiling after a
 # `cargo update`, that is why — re-pin rather than patching around it.
 rig-llama-cpp = "0.5"
+# For `_exit` at shutdown — see the RunEvent::Exit handler in lib.rs. Already in
+# the tree via tokio and rusqlite; this only makes it directly callable.
+libc = "0.2"

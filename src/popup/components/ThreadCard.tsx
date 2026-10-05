@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { MessageCircle, ExternalLink } from "lucide-react";
-import { MessageType, NewTagRequest } from "../../types/messages";
 import { logger } from "../../utils/logger";
+import { recordVisitedThread } from "../../utils/activity";
 
 // ThreadCard data interface (matching the shared component)
 interface ThreadCardData {
@@ -89,7 +89,7 @@ export const Tag: React.FC<{ label: string }> = ({ label }) => (
  * The link out to the HN discussion, and the one place that records the visit.
  *
  * It must be shared rather than copied. The global click interceptor in
- * chrome-shim records any HN thread link the user opens, and for a link that
+ * webview.ts records any HN thread link the user opens, and for a link that
  * does not record itself it has nothing to label the visit with but the link's
  * own text — so Memory fills with rows called "Join the thread - 10 comments".
  * `data-visit-recorded` is what tells the interceptor to stand back and let the
@@ -109,16 +109,8 @@ export const JoinThreadLink: React.FC<{
     rel="noopener noreferrer"
     className="flex items-center gap-1 text-[#0066cc] hover:underline"
     data-visit-recorded="true"
-    onClick={() => {
-      // No preventDefault: the link still opens, this only records the visit.
-      const msg: NewTagRequest = {
-        type: MessageType.NEW_TAG,
-        data: { tag: theme, type: 'visited_thread', anchor },
-      };
-      chrome.runtime.sendMessage(msg).catch(() => {
-        logger.debug('No listeners for NEW_TAG message, this is expected');
-      });
-    }}
+    // No preventDefault: the link still opens, this only records the visit.
+    onClick={() => recordVisitedThread(theme, anchor)}
   >
     <MessageCircle
       className={`w-3 h-3 transition-all duration-500 ${highlight ? 'text-[#ff6600] animate-pulse' : ''}`}

@@ -1,5 +1,5 @@
 import { ChatConfig } from '../types/chat';
-import { contextDb, SettingKeys } from '../background/contextDb';
+import { contextDb, SettingKeys } from './contextDb';
 import { CONFIG } from '../config';
 import { LogLevel } from './logger';
 

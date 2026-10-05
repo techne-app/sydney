@@ -9,7 +9,9 @@
 //!   · pinned vs decoy — "explain this thread" picked the thread just read
 //!   · false apology on unpin — the model disowned a correct earlier answer
 //!
-//! Needs llama-server on :8081 and the Python sidecar on :8000. Slow: each
+//! Loads Gemma in-process, so close the app first — 24GB cannot hold two
+//! copies of a 12GB model, and the symptom is empty replies, not an error. Slow:
+//! each
 //! check is one or more real turns through a 12GB model.
 
 use std::sync::Arc;

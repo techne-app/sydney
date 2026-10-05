@@ -1,4 +1,4 @@
-import { contextDb, SettingKeys } from '../background/contextDb';
+import { contextDb, SettingKeys } from './contextDb';
 
 export enum LogLevel {
   DEBUG = 0,
