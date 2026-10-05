@@ -19,6 +19,8 @@ use std::sync::Arc;
 use app_lib::agent::{run_turn, AgentReply, PinnedThread};
 use app_lib::corpus::Corpus;
 use app_lib::memory::SqliteConversationMemory;
+use rig_core::memory::ConversationMemory;
+use rig_core::message::{Message, ToolResultContent, UserContent};
 use app_lib::search::Embedder;
 
 /// A throwaway store, so a run cannot pollute real conversations.
@@ -38,25 +40,46 @@ fn session(name: &str) -> String {
 /// summary — it names a thread and the model is expected to go and read it, so
 /// the id has to be one the thread service will actually serve. A fixed id would
 /// also rot: the corpus holds 30 days, and last month's thread stops being one.
-async fn pinned() -> PinnedThread {
-    let cards: serde_json::Value = reqwest::Client::new()
+/// The `count` busiest threads the sidebar is offering.
+///
+/// Busiest, not simply the top cards: the feed ranks by karma density, and its
+/// second card came back with three comments and 922 characters — nowhere near
+/// the 14,000-character budget, so the window check it was meant to exercise
+/// passed without ever being tested. A thread has to be big to be interesting
+/// here.
+async fn pinned_cards(count: usize) -> Vec<PinnedThread> {
+    let mut cards: serde_json::Value = reqwest::Client::new()
         .post("https://www.techne.app/api/thread-cards/")
         .json(&serde_json::json!({
-            "num_cards": 1, "hours_back": 24,
+            "num_cards": 20, "hours_back": 24,
             "sort_by": "karma_density", "density_min_comment_constant": 100
         }))
         .send()
         .await
-        .expect("fetch a sidebar card")
+        .expect("fetch sidebar cards")
         .json()
         .await
-        .expect("parse the card");
-    let card = &cards[0];
-    PinnedThread {
-        id: card["id"].as_u64().expect("card has an id"),
-        story_title: card["story_title"].as_str().map(str::to_string),
-        theme: card["theme"].as_str().map(str::to_string),
-    }
+        .expect("parse the cards");
+    let list = cards.as_array_mut().expect("cards is a list");
+    list.sort_by_key(|c| std::cmp::Reverse(c["comment_count"].as_u64().unwrap_or(0)));
+    list.iter()
+        .take(count)
+        .map(|card| {
+            println!(
+                "    card {} — {} comments",
+                card["id"], card["comment_count"]
+            );
+            PinnedThread {
+                id: card["id"].as_u64().expect("card has an id"),
+                story_title: card["story_title"].as_str().map(str::to_string),
+                theme: card["theme"].as_str().map(str::to_string),
+            }
+        })
+        .collect()
+}
+
+async fn pinned() -> PinnedThread {
+    pinned_cards(1).await.into_iter().next().expect("at least one card")
 }
 
 /// The threads `get_thread` was asked to read this turn.
@@ -198,6 +221,103 @@ async fn main() {
     let r = turn!(s, "find discussions about medieval Bulgarian goat farming subsidies");
     report.check("still answers, no crash", r.reply.len() > 10, &r.reply);
     report.check("no jargon", jargon(&r.reply) == 0, &r.reply);
+
+    // The case that was missing, and so the bug that got through: nothing here
+    // had ever read two threads in one conversation. A thread read with
+    // get_thread is ~14,000 characters and the whole history is re-sent every
+    // turn, so the second read used to blow the window outright —
+    // `Prompt 11193 tokens exceeds n_ctx 8192` — on a completely ordinary
+    // sequence of questions.
+    println!("\n=== 8. two threads in one conversation  <- the window");
+    let s = session("two-threads");
+    turn!(s, "find me discussions about rust programming");
+    let first = turn!(s, "tell me about the first one");
+    let second = turn!(s, "now tell me about the second one");
+    let follow_up = turn!(s, "so what did people disagree about in that one?");
+
+    let read: Vec<u64> = [&first, &second].iter().flat_map(|r| thread_ids(r)).collect();
+    report.check(
+        "reads two different threads",
+        read.len() == 2 && read[0] != read[1],
+        &format!("{read:?}"),
+    );
+    for (name, reply) in [("second read", &second), ("the follow-up", &follow_up)] {
+        report.check(
+            &format!("{name} does not overflow the window"),
+            reply.error.is_none(),
+            reply.error.as_deref().unwrap_or("no error"),
+        );
+    }
+    report.check("still answering", follow_up.reply.len() > 20, &follow_up.reply);
+
+    // The assertions above are a smoke test and will pass on small threads
+    // whatever the history does — which is exactly why the bug got through. This
+    // one measures the mechanism instead: whatever size the threads happen to
+    // be, only the most recently read one may still carry its comments.
+    let history = memory.load(&s).await.expect("load the conversation back");
+    let mut carrying = 0;
+    let mut hidden = 0;
+    for message in &history {
+        let Message::User { content } = message else { continue };
+        for item in content.iter() {
+            let UserContent::ToolResult(result) = item else { continue };
+            for part in result.content.iter() {
+                let ToolResultContent::Text(text) = part else { continue };
+                let Ok(body) = serde_json::from_str::<serde_json::Value>(&text.text) else {
+                    continue;
+                };
+                match body.get("comments").and_then(|c| c.as_str()) {
+                    Some(c) if c.starts_with("(not shown") => hidden += 1,
+                    Some(_) => carrying += 1,
+                    None => {}
+                }
+            }
+        }
+    }
+    report.check(
+        "only the newest thread keeps its comments",
+        carrying == 1 && hidden >= 1,
+        &format!("{carrying} carrying, {hidden} hidden"),
+    );
+
+    // The sequence that actually broke, which case 8 does not reach: two cards
+    // from the sidebar, pinned one after the other. Search results are small —
+    // three comments, 500 characters — and never approach the window. Sidebar
+    // cards are ranked by karma density and run to hundreds of comments, so each
+    // read is a full 14,000-character budget and the second one is what used to
+    // fail with `Prompt 10711 tokens exceeds n_ctx 8192`.
+    println!("\n=== 9. two big pinned threads  <- #58");
+    let cards = pinned_cards(2).await;
+    if cards.len() < 2 {
+        report.check("two sidebar cards available", false, "the feed returned fewer than two");
+    } else {
+        let s = session("two-pins");
+        println!("    pinning {} then {}", cards[0].id, cards[1].id);
+        // Questions that cannot be answered from the attachment's title and
+        // theme, so the model has to read. Asked "what is this thread about?" it
+        // answers from the title and never calls the tool — and then only one
+        // thread is ever in the window, which is how this case passed twice
+        // while the bug it is named after was still live.
+        let one = turn!(s, "what specific figures did people give in this thread?", cards[0].clone());
+        let two = turn!(s, "and what figures are in this one?", cards[1].clone());
+
+        // Checked first and deliberately harshly: if the model did not read both
+        // threads, nothing below is evidence of anything, and a quiet pass would
+        // be worse than a failure.
+        report.check(
+            "actually reads both threads (otherwise this case proves nothing)",
+            thread_ids(&one).contains(&cards[0].id) && thread_ids(&two).contains(&cards[1].id),
+            &format!("first read {:?}, second read {:?}", thread_ids(&one), thread_ids(&two)),
+        );
+
+        for (name, reply) in [("first pin", &one), ("second pin", &two)] {
+            report.check(
+                &format!("{name} does not overflow the window"),
+                reply.error.is_none(),
+                reply.error.as_deref().unwrap_or("no error"),
+            );
+        }
+    }
 
     println!("\n{}", "=".repeat(46));
     if report.failures.is_empty() {
