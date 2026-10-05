@@ -410,6 +410,10 @@ pub async fn run_turn(
 ) -> AgentReply {
     let collected: Shared = Arc::new(Mutex::new(Collected::default()));
 
+    // Which thread's comments the history may keep. Only one fits beside the
+    // reply and the preamble, and the pinned one is the one being asked about.
+    memory.focus_on(pinned_thread.as_ref().map(|t| t.id));
+
     println!(
         "[agent] attached={}",
         match pinned_thread.as_ref().and_then(|t| t.story_title.as_deref()) {

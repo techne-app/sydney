@@ -15,7 +15,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rig_core::memory::{ConversationMemory, MemoryError};
-use rig_core::message::Message;
+use rig_core::message::{Message, ToolResultContent, UserContent};
+use rig_core::OneOrMany;
 use rig_core::wasm_compat::WasmBoxedFuture;
 use rusqlite::Connection;
 
@@ -33,6 +34,14 @@ pub struct SqliteConversationMemory {
     /// One lock is fine here: these are tiny local reads on a desktop app, not
     /// a server under load.
     conn: Mutex<Connection>,
+    /// The thread the user currently has pinned, set before each turn.
+    ///
+    /// `load` needs it because only one thread's comments fit in the window, and
+    /// which one to keep cannot be worked out from the history alone. The first
+    /// attempt at this kept whichever was read most recently — which is precisely
+    /// the wrong one at the moment the user pins something new, because the model
+    /// is about to read the new thread and add it on top of the old.
+    focus: Mutex<Option<u64>>,
 }
 
 impl SqliteConversationMemory {
@@ -61,7 +70,16 @@ impl SqliteConversationMemory {
         println!("[agent] memory at {}", path.display());
         Ok(Self {
             conn: Mutex::new(conn),
+            focus: Mutex::new(None),
         })
+    }
+
+    /// Tell `load` which thread's comments to keep. Set before each turn from
+    /// whatever the user has pinned; `None` falls back to the most recent.
+    pub fn focus_on(&self, thread_id: Option<u64>) {
+        if let Ok(mut focus) = self.focus.lock() {
+            *focus = thread_id;
+        }
     }
 
     fn load_blocking(&self, conversation_id: &str) -> Result<Vec<Message>, MemoryError> {
@@ -83,6 +101,22 @@ impl SqliteConversationMemory {
                 Err(error) => eprintln!("[agent] skipping unreadable message: {error}"),
             }
         }
+        let focus = self.focus.lock().ok().and_then(|f| *f);
+        let out = hide_superseded_threads(out, focus);
+
+        // What the model is actually about to be given. Guessing at this twice
+        // produced two wrong fixes, so it is now printed: `kept` is the thread
+        // whose comments survived, and `chars` is everything going into the
+        // window beside the preamble and the reply budget.
+        let chars: usize = out
+            .iter()
+            .map(|m| serde_json::to_string(m).map(|j| j.len()).unwrap_or(0))
+            .sum();
+        println!(
+            "[history] {} messages, {chars} chars (~{} tokens), focus={focus:?}",
+            out.len(),
+            chars * 2 / 7
+        );
         Ok(out)
     }
 
@@ -122,6 +156,100 @@ impl SqliteConversationMemory {
         .map(|_| ())
         .map_err(MemoryError::backend)
     }
+}
+
+/// Hide the comments of every thread but the one in focus.
+///
+/// A thread read with `get_thread` runs to ~14,000 characters, and the entire
+/// history is re-sent on every turn, so a second thread in one conversation
+/// overflows the 8,192-token window outright:
+/// `Prompt 11193 tokens exceeds n_ctx 8192`. Reading one thread and then another
+/// is an ordinary thing to do, so the history is what has to give.
+///
+/// Only the `comments` field goes. The thread's id, title and theme stay, so the
+/// model still knows it read that thread and can call `get_thread` again if the
+/// conversation comes back to it — which costs nothing, since `ThreadStore` has
+/// it. It simply stops carrying the full text of a discussion nobody is asking
+/// about any more.
+///
+/// `focus` is the pinned thread. Keeping the most *recent* one instead looks
+/// equivalent and is not: at the moment the user pins a new thread, the newest
+/// in the history is the OLD one, and the model is about to read the new one on
+/// top of it. That is the overflow this is here to prevent, so it has to be told
+/// which thread matters rather than inferring it. With nothing pinned there is
+/// nothing to infer from, and the most recent is the best guess available.
+///
+/// Nothing is deleted: the stored rows keep their full text, and this only
+/// shapes what is handed to the model for one turn.
+fn hide_superseded_threads(messages: Vec<Message>, focus: Option<u64>) -> Vec<Message> {
+    let mut kept_one = false;
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+
+    for message in messages.into_iter().rev() {
+        let Message::User { content } = message else {
+            out.push(message);
+            continue;
+        };
+
+        let items: Vec<UserContent> = content
+            .iter()
+            .cloned()
+            .map(|item| {
+                let UserContent::ToolResult(mut result) = item else {
+                    return item;
+                };
+                let parts: Vec<ToolResultContent> = result
+                    .content
+                    .iter()
+                    .cloned()
+                    .map(|part| {
+                        let ToolResultContent::Text(mut text) = part else {
+                            return part;
+                        };
+                        // Only a get_thread result has `comments`; a search
+                        // result or an error passes through untouched.
+                        let Ok(mut body) = serde_json::from_str::<serde_json::Value>(&text.text)
+                        else {
+                            return ToolResultContent::Text(text);
+                        };
+                        if body.get("comments").is_none() {
+                            return ToolResultContent::Text(text);
+                        }
+                        let is_focus = focus.is_some_and(|id| {
+                            body.get("thread_id").and_then(serde_json::Value::as_u64) == Some(id)
+                        });
+                        // Walking backwards, so with no focus the first one
+                        // reached is the most recently read.
+                        if is_focus || (focus.is_none() && !kept_one) {
+                            kept_one = true;
+                            return ToolResultContent::Text(text);
+                        }
+                        body["comments"] = serde_json::Value::String(
+                            "(not shown: this is no longer the thread being discussed. \
+                             Call get_thread with its id to read it again.)"
+                                .into(),
+                        );
+                        text.text = body.to_string();
+                        ToolResultContent::Text(text)
+                    })
+                    .collect();
+                if let Ok(parts) = OneOrMany::many(parts) {
+                    result.content = parts;
+                }
+                UserContent::ToolResult(result)
+            })
+            .collect();
+
+        // many() fails only on an empty list, and we map one-for-one, so this
+        // cannot lose a message.
+        match OneOrMany::many(items) {
+            Ok(content) => out.push(Message::User { content }),
+            Err(_) => out.push(Message::User { content }),
+        }
+    }
+
+    out.reverse();
+    out
 }
 
 /// Rig calls `load` before each turn and `append` after a successful one, with
