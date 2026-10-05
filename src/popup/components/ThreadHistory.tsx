@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { contextDb, type Tag } from '../../background/contextDb';
-import { MessageType } from '../../types/messages';
+import { contextDb, type Tag } from '../../utils/contextDb';
+import { onActivity } from '../../utils/activity';
 import { MemoryCard } from './MemoryCard';
 import { logger } from '../../utils/logger';
 
@@ -52,22 +52,11 @@ export const ThreadHistory: React.FC = () => {
   useEffect(() => {
     loadTags();
 
-    // Define the message listener function
-    const handleMessage = (message: any) => {
-      logger.debug('ThreadHistory received message:', message);
-      if (message.type === MessageType.TAGS_UPDATED) {
-        logger.debug('Reloading tags due to TAGS_UPDATED message');
-        loadTags();
-      }
-    };
-
-    // Add the listener
-    chrome.runtime.onMessage.addListener(handleMessage);
-
-    // Clean up the listener when component unmounts
-    return () => {
-      chrome.runtime.onMessage.removeListener(handleMessage);
-    };
+    // onActivity returns its own unsubscribe, which is exactly what an effect
+    // wants back — no paired add/remove to keep in step.
+    return onActivity(kind => {
+      if (kind === 'threads') loadTags();
+    });
   }, []);
 
   return (

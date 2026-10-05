@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { contextDb, SettingKeys } from '../../background/contextDb';
+import { contextDb, SettingKeys } from '../../utils/contextDb';
 import { logger } from '../../utils/logger';
 
 export const SettingsPage: React.FC = () => {

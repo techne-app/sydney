@@ -1,32 +1,9 @@
-// Mock Chrome APIs
-const mockChrome = {
-  runtime: {
-    sendMessage: jest.fn().mockResolvedValue(undefined),
-    onMessage: {
-      addListener: jest.fn(),
-      removeListener: jest.fn()
-    },
-    getURL: jest.fn((path: string) => `chrome-extension://mock-id/${path}`)
-  },
-  tabs: {
-    create: jest.fn(),
-    update: jest.fn(),
-    query: jest.fn().mockResolvedValue([])
-  },
-  windows: {
-    update: jest.fn()
-  },
-  action: {
-    onClicked: {
-      addListener: jest.fn()
-    }
-  }
-};
-
-// Set up global Chrome mock
-(global as any).chrome = mockChrome;
-
-// Mock logger to avoid console output during tests
+// Keep tests quiet. The logger writes through to the console otherwise, and a
+// failing assertion is hard to find in a page of debug output.
+//
+// This file used to mock chrome.runtime, chrome.tabs, WebLLM and
+// Transformers.js. All four left with the Chrome extension build: the app has
+// no extension APIs to stand in for, and inference moved into Rust in #47.
 jest.mock('./utils/logger', () => ({
   logger: {
     debug: jest.fn(),
@@ -38,17 +15,6 @@ jest.mock('./utils/logger', () => ({
     model: jest.fn(),
     database: jest.fn(),
     api: jest.fn(),
-    intent: jest.fn()
-  }
-}));
-
-// Mock WebLLM dependency to avoid ES module issues
-jest.mock('@mlc-ai/web-llm', () => ({
-  CreateExtensionServiceWorkerMLCEngine: jest.fn(),
-  prebuiltAppConfig: {}
-}));
-
-// Mock Hugging Face Transformers to avoid ES module issues
-jest.mock('@huggingface/transformers', () => ({
-  pipeline: jest.fn()
+    intent: jest.fn(),
+  },
 }));

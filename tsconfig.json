@@ -9,6 +9,11 @@
     "target": "es5",
     "allowJs": true,
     "esModuleInterop": true,
+    // Dependencies ship .d.ts files written for newer targets than ours, and
+    // their errors are not ours to fix — @tauri-apps/api alone reports three.
+    // Without this the typecheck cannot be used as a gate, which is the point
+    // of it.
+    "skipLibCheck": true,
     "resolveJsonModule": true
   },
   "exclude": [
@@ -18,10 +23,9 @@
     "dist",
     "dist-tauri",
     "coverage",
-    // `allowJs` is on, so without this the extension build tries to typecheck
-    // the JavaScript Tauri generates under target/ and fails on minified and
-    // binary assets. Only bites after a Tauri build, which is why CI — with a
-    // fresh checkout and no target/ — never sees it.
+    // `allowJs` is on, so without this the typecheck walks into the JavaScript
+    // Tauri generates under target/ and fails on minified and binary assets.
+    // Only bites after a Tauri build, never on a fresh checkout.
     "src-tauri/target"
   ]
 } 

@@ -5,8 +5,8 @@ import { configStore } from '../../utils/configStore';
 import MessageBubble from './MessageBubble';
 import { sessionClient, AgentResponse } from '../../tauri-compat/sessionClient';
 import { ThreadContextService } from '../../utils/ThreadContextService';
-import { MessageType } from '../../types/messages';
 import { logger } from '../../utils/logger';
+import { recordSearch } from '../../utils/activity';
 import { modelState } from '../../utils/modelState';
 import { Modal } from './Modal';
 import { ActivityPage } from './ActivityPage';
@@ -292,12 +292,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         for (const call of response.tool_calls ?? []) {
           const keyword = call.arguments?.keyword_filter;
           if (call.name === 'search_threads' && typeof keyword === 'string' && keyword.trim()) {
-            chrome.runtime.sendMessage({
-              type: MessageType.NEW_SEARCH,
-              data: { query: keyword },
-            }).catch(() => {
-              logger.debug('No listeners for NEW_SEARCH, this is expected');
-            });
+            recordSearch(keyword);
           }
         }
 

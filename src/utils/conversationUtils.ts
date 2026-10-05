@@ -1,4 +1,4 @@
-import { contextDb } from '../background/contextDb';
+import { contextDb } from './contextDb';
 import { Conversation, ChatMessage, MODEL_OPTIONS, ThreadCardData } from '../types/chat';
 
 export class ConversationManager {

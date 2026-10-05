@@ -1,28 +1,26 @@
 /**
- * Chrome API shim for Tauri.
+ * The things a WKWebView does not do the way a browser does.
  *
- * In Chrome, the popup communicates with the background script via chrome.runtime.
- * In Tauri there is no background script — this shim replaces chrome.runtime so
- * existing popup components don't crash.
+ * Two of them, both the kind of problem that only appears once the app is
+ * running in a real window:
  *
- * - onMessage.addListener / removeListener → tracks listeners
- * - sendMessage(NEW_TAG)          → calls contextDb.storeTag() directly
- * - sendMessage(NEW_SEARCH)       → calls contextDb.storeSearch() directly
+ * - **Drag and drop.** `dragstart` fires and macOS then swallows everything
+ *   after it, and `dataTransfer` comes back empty on a synthetic drop. So drags
+ *   are tracked by hand, with their data cached and their ghost image drawn and
+ *   torn down explicitly.
+ * - **External links.** Opening one is `tauri-plugin-shell`'s job, through a
+ *   listener it injects on `<body>`. We watch the same clicks only to record the
+ *   visit, and must not interfere with them.
  *
- * Installed in entry.tsx before React renders.
+ * This file used to also impersonate `chrome.runtime`, for components ported
+ * from the Chrome extension — a message bus whose whole job was writing two rows
+ * to IndexedDB. The extension lives in its own repo now, so those components
+ * call `utils/activity` directly and the impersonation is gone.
+ *
+ * Installed from entry.tsx before React renders.
  */
 
-import { contextDb } from '../background/contextDb';
-import { MessageType } from '../types/messages';
-
-// Track registered message listeners so responses can be dispatched back to callers
-const messageListeners: ((message: any) => void)[] = [];
-
-function dispatchMessage(message: any) {
-  for (const listener of messageListeners) {
-    try { listener(message); } catch {}
-  }
-}
+import { recordVisitedThread } from '../utils/activity';
 
 // WKWebView: dragstart fires but macOS swallows everything after (drop/dragend/mouseup).
 // Fix: backup dataTransfer data, cancel native drag, use pointer events + ghost clone instead.
@@ -99,7 +97,7 @@ document.addEventListener('pointerup', (e: PointerEvent) => {
       dataTransfer: dt,
     } as any));
   } catch (err) {
-    console.debug('[chrome-shim] synthetic drop failed:', err);
+    console.debug('[webview] synthetic drop failed:', err);
   } finally {
     dataTransferCache.clear();
   }
@@ -116,13 +114,12 @@ function recordVisit(anchor: HTMLAnchorElement) {
   if (anchor.dataset.visitRecorded === 'true') return;
   if (!HN_ITEM_URL.test(anchor.href)) return;
 
+  // Falling back to the link's own text, which is why a thread link that can do
+  // better should record itself — see JoinThreadLink.
   const label = (anchor.textContent || '').trim();
   if (!label) return;
 
-  contextDb
-    .storeTag(label, 'visited_thread', anchor.href)
-    .then(() => dispatchMessage({ type: MessageType.TAGS_UPDATED, data: {} }))
-    .catch((err: any) => console.debug('[chrome-shim] storeTag failed', err));
+  recordVisitedThread(label, anchor.href);
 }
 
 // Opening external links is tauri-plugin-shell's job — its injected script
@@ -146,34 +143,3 @@ document.addEventListener('click', (e) => {
     recordVisit(anchor as HTMLAnchorElement);
   }
 }, true);
-
-(window as any).chrome = {
-  runtime: {
-    onMessage: {
-      addListener: (fn: (message: any) => void) => {
-        messageListeners.push(fn);
-      },
-      removeListener: (fn: (message: any) => void) => {
-        const idx = messageListeners.indexOf(fn);
-        if (idx >= 0) messageListeners.splice(idx, 1);
-      },
-    },
-    sendMessage: async (msg: any): Promise<void> => {
-      if (!msg?.type) return;
-
-      if (msg.type === MessageType.NEW_TAG && msg.data) {
-        contextDb
-          .storeTag(msg.data.tag, msg.data.type, msg.data.anchor)
-          .then(() => dispatchMessage({ type: MessageType.TAGS_UPDATED, data: {} }))
-          .catch((err: any) => console.debug('[chrome-shim] storeTag failed', err));
-      }
-
-      if (msg.type === MessageType.NEW_SEARCH && msg.data) {
-        contextDb
-          .storeSearch(msg.data.query)
-          .then(() => dispatchMessage({ type: MessageType.SEARCHES_UPDATED, data: {} }))
-          .catch((err: any) => console.debug('[chrome-shim] storeSearch failed', err));
-      }
-    },
-  },
-};
