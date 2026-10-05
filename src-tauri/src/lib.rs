@@ -65,11 +65,27 @@ pub fn run() {
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
     .run(|handle, event| {
-      // Release both models before the process tears down — see Loaded.
       if matches!(event, tauri::RunEvent::Exit) {
         use tauri::Manager;
+        // Free what we can. This succeeds unless a turn or a summary is still
+        // running, in which case that work holds its own handle — see Loaded.
         handle.state::<agent::Model>().0.release();
         handle.state::<agent::AppEmbedder>().0.release();
+
+        // Then leave without running the C++ static destructors.
+        //
+        // llama.cpp frees the Metal device from one, and aborts there if a model
+        // is still alive — so quitting during a twenty-second summary showed a
+        // crash backtrace on every close. Waiting for that work to finish does
+        // avoid the abort, but it means the process hangs around for up to
+        // twenty seconds finishing a summary the user has just walked away from.
+        // Neither is worth it for cleanup the kernel is about to do anyway.
+        //
+        // `_exit` rather than `std::process::exit`, which runs the atexit
+        // handlers and would land in the same destructor. Nothing of ours is
+        // waiting to be flushed: SQLite commits per turn, and the webview and
+        // its IndexedDB are already gone by the time Exit fires.
+        unsafe { libc::_exit(0) };
       }
     });
 }
