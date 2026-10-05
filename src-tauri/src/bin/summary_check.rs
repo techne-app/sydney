@@ -69,6 +69,26 @@ async fn main() {
         format!("{}/{} comments in {elapsed}s", result.used, result.total),
     );
     check("produced prose", result.summary.len() > 200, format!("{} chars", result.summary.len()));
+    // The shape the modal lays out: an opening, quotations from the discussion,
+    // a closing. Quotations are the part worth reading and the only part that
+    // can be verified, so a summary without one has lost the point.
+    let quotes = result
+        .summary
+        .lines()
+        .filter(|l| l.trim_start().starts_with(['"', '\u{201c}']))
+        .count();
+    check(
+        "quotes the discussion",
+        quotes >= 2,
+        format!("{quotes} quotation(s)"),
+    );
+    check(
+        "says something either side of the quotes",
+        result.summary.lines().filter(|l| {
+            !l.trim().is_empty() && !l.trim_start().starts_with(['"', '\u{201c}'])
+        }).count() >= 2,
+        "opening and closing".into(),
+    );
     check(
         "one or two paragraphs, not a list",
         !result.summary.contains("\n- ") && !result.summary.contains("\n* ") && !result.summary.contains("\n#"),

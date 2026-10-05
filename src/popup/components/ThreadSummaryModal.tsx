@@ -23,6 +23,73 @@ interface ThreadSummaryModalProps {
  * and never revised: on a measured example it described 2 comments of a
  * 151-comment discussion.
  */
+/**
+ * The summary, laid out as the three things it actually is.
+ *
+ * The model returns an opening, two or three quotations from the discussion,
+ * and a closing. Rendering that as one centred block wasted it: centred text
+ * past two lines makes the eye hunt for each line start, and quotations set like
+ * prose stop reading as somebody's actual words.
+ *
+ * Split by LINE, not by blank line. The model puts each quotation on its own
+ * line but does not leave a blank one between them, so splitting on paragraphs
+ * merged all three into a single italic block with stray quote marks still in
+ * it — which looked exactly like the wall of text this replaced.
+ *
+ * Parsed rather than returned as structured fields because the model is more
+ * reliable writing prose than JSON, and the shape is unambiguous: a line that
+ * opens and closes with a quotation mark is a quotation. Anything else falls
+ * through as a paragraph, so an unexpected answer still renders.
+ */
+const QUOTED = /^["\u201c]([\s\S]+)["\u201d]$/;
+
+const SummaryBody: React.FC<{ text: string }> = ({ text }) => {
+  const blocks: { quote: boolean; text: string }[] = [];
+
+  for (const line of text.split('\n').map(l => l.trim()).filter(Boolean)) {
+    const quoted = line.match(QUOTED);
+    const previous = blocks[blocks.length - 1];
+    if (quoted) {
+      blocks.push({ quote: true, text: quoted[1] });
+    } else if (previous && !previous.quote) {
+      // A paragraph the model wrapped across lines, rather than a new one.
+      previous.text += ' ' + line;
+    } else {
+      blocks.push({ quote: false, text: line });
+    }
+  }
+
+  // Said once, above the first quotation. A rule and an italic say "set apart",
+  // which the reader can just as easily take for the summary's own emphasis —
+  // the one thing that makes these worth reading is that they are what people
+  // actually wrote, and nothing on the page said so.
+  const firstQuote = blocks.findIndex(b => b.quote);
+
+  return (
+    <div className="text-[#333] text-sm leading-6">
+      {blocks.map((block, i) => (
+        <React.Fragment key={i}>
+          {i === firstQuote && (
+            <div className="text-[#999] text-[11px] uppercase tracking-wider mt-4 mb-2">
+              From the discussion
+            </div>
+          )}
+          {block.quote ? (
+            // The quotation marks stay. They are the one mark every reader
+            // already knows means somebody said this, and stripping them left
+            // the attribution resting entirely on a coloured rule.
+            <blockquote className="my-2.5 pl-3 border-l-2 border-[#ff6600]/50 text-[#444]">
+              &ldquo;{block.text}&rdquo;
+            </blockquote>
+          ) : (
+            <p className="mb-3">{block.text}</p>
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+};
+
 export const ThreadSummaryModal: React.FC<ThreadSummaryModalProps> = ({ thread, onClose }) => {
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,11 +174,7 @@ export const ThreadSummaryModal: React.FC<ThreadSummaryModalProps> = ({ thread, 
             </div>
           )}
 
-          {summary && (
-            <div className="text-[#333] text-sm leading-6 text-center whitespace-pre-wrap">
-              {summary}
-            </div>
-          )}
+          {summary && <SummaryBody text={summary} />}
         </div>
 
         <div className="p-4">

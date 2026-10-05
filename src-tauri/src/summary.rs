@@ -172,15 +172,108 @@ async fn read_thread(thread_id: u64) -> Result<Thread, String> {
 }
 
 const INSTRUCTION: &str = concat!(
-    "You summarise Hacker News discussions for someone deciding whether to read ",
-    "the whole thing. Write at most 130 words, one or two paragraphs of plain ",
-    "prose — no headings, no bullets, no preamble.\n\n",
-    "Say what people actually argued: the main positions, where they disagreed, ",
-    "and any concrete experience or surprising claim. Where opinion is divided, ",
-    "say so rather than inventing a consensus.\n\n",
-    "Comments carry depth and anonymised author markers. Write about the ideas, ",
-    "never the markers. Use only what is in the comments."
+    "You write the blurb that tells someone whether a Hacker News discussion is ",
+    "worth their time. Three parts, in this order, separated by blank lines.\n\n",
+    "1. ONE sentence on what people are doing with the subject — arguing a ",
+    "point, comparing their own experience, explaining how something works, ",
+    "remembering someone — and what is at stake in it. The reader has already ",
+    "seen the title and the topic directly above this, so do not restate either: ",
+    "say the thing they do not know yet.\n\n",
+    "2. Two or three quotations, each on its own line, wrapped in double quotes. ",
+    "Copy them WORD FOR WORD from the comments — do not tidy, shorten, join or ",
+    "reword them, and never invent one. Pick the lines that are concrete, ",
+    "surprising or sharply put. Where the thread divides, take them from ",
+    "different sides of it. A quotation with a real number or a vivid comparison ",
+    "in it beats a general one.\n\n",
+    "3. Two sentences saying what the thread amounts to, and naming anything ",
+    "substantial the quotations did not cover. Where people genuinely disagree, ",
+    "say where the disagreement lies. Where they mostly agree, or are trading ",
+    "experience rather than arguing, say that instead — never invent a ",
+    "disagreement to give the thread a shape.\n\n",
+    "No headings, no numbering, no bullets, no preamble — just the three parts. ",
+    "Write about the ideas, never the depth or author markers. Use only what is ",
+    "in the comments."
 );
+
+/// Flatten text so a quotation can be compared with its source.
+///
+/// Comments arrive as HTML — `<p>`, `&#x27;`, `&gt;` — and the model quotes what
+/// it reads, not what it was sent, so it writes `it's` where the source holds
+/// `it&#x27;s`. Curly quotes, inner quote marks and line wrapping differ too.
+/// None of that is the model inventing anything, so none of it should fail a
+/// check whose job is to catch invention.
+fn flatten(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for ch in text.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if in_tag => {}
+            // Curly quotes and apostrophes become their straight equivalents,
+            // and an inner double quote becomes a single one: a quotation is
+            // wrapped in double quotes, so the model correctly switches the ones
+            // inside it.
+            '\u{2018}' | '\u{2019}' | '\u{201c}' | '\u{201d}' | '"' => out.push('\''),
+            c if c.is_whitespace() => {
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            c => out.extend(c.to_lowercase()),
+        }
+    }
+    out.replace("&#x27;", "'")
+        .replace("&quot;", "'")
+        .replace("&#x2f;", "/")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
+        .trim()
+        .to_string()
+}
+
+/// Drop any quotation that is not in the thread, word for word.
+///
+/// This is the reason the summary quotes rather than paraphrases. A paraphrase
+/// can only be asked not to invent; a quotation can be checked. Measured on this
+/// very thread, the agent turned a comment saying 13 million gallons "is less
+/// than half of what the City of Lincoln reports using on Sept. 29" into
+/// "Lincoln uses 30M to 60M gallons per day" — a fabricated range sitting
+/// indistinguishably among eleven real figures.
+///
+/// The match has to be **contiguous**. An honest trim starts mid-sentence and
+/// capitalises, which flattening forgives; stitching two distant lines into one
+/// quotation is exactly what it must not forgive, and contiguity is the
+/// difference between the two.
+fn drop_unverifiable_quotes(summary: &str, source: &str) -> String {
+    let haystack = flatten(source);
+    let mut kept = Vec::new();
+
+    for line in summary.lines() {
+        let trimmed = line.trim();
+        let is_quote = trimmed.len() > 2
+            && trimmed.starts_with(['"', '\u{201c}'])
+            && trimmed.ends_with(['"', '\u{201d}']);
+
+        if is_quote {
+            let inner: String = trimmed.chars().skip(1).take(trimmed.chars().count() - 2).collect();
+            // Terminal punctuation is ignored. A quotation that stops early gets
+            // a full stop where the source had a comma or a question mark, which
+            // is how anyone trims a quotation and is not what this is looking
+            // for. Every word still has to match, contiguously.
+            let needle = flatten(&inner);
+            let needle = needle.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', ' ']);
+            if needle.is_empty() || !haystack.contains(needle) {
+                println!("[summary] dropped an unverifiable quote: {}", &inner.chars().take(200).collect::<String>());
+                continue;
+            }
+        }
+        kept.push(trimmed.to_string());
+    }
+
+    kept.join("\n")
+}
 
 pub struct ThreadSummary {
     pub summary: String,
@@ -283,6 +376,7 @@ impl ThreadStore {
             .additional_params(serde_json::json!({ "thinking": false }))
             .build();
 
+        let source = text.clone();
         let summary = agent
             .prompt(text)
             .await
@@ -290,6 +384,7 @@ impl ThreadStore {
             .trim()
             .to_string();
 
+        let summary = drop_unverifiable_quotes(&summary, &source);
         println!("[summary] model took {:.1}s", started.elapsed().as_secs_f32());
         entry.summary = Some(summary.clone());
 
@@ -314,4 +409,74 @@ pub async fn summarize_thread_command(
         "used": result.used,
         "total": result.total,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drop_unverifiable_quotes;
+
+    /// Two real comments, as the endpoint sends them: HTML entities, curly
+    /// apostrophes, and an inner quotation in double quotes.
+    const SOURCE: &str = "<<depth=0>> [[uid=U1]]\n\
+        <p>I do this work too, but for a different reason: in my area they make as \
+        much or more than mid level software engineers, so when it&#x27;s about \
+        adding a breaker box they want 8k.\n---END-COMMENT---\n\
+        <<depth=1>> [[uid=U2]]\n\
+        <p>Why aren\u{2019}t the data centres just honest about their water usage if \
+        it\u{2019}s seemingly so low? Perhaps it is not a meaningful amount.\n---END-COMMENT---\n";
+
+    fn kept(summary: &str) -> usize {
+        drop_unverifiable_quotes(summary, SOURCE)
+            .lines()
+            .filter(|l| l.starts_with('"'))
+            .count()
+    }
+
+    #[test]
+    fn keeps_a_quote_that_is_really_there() {
+        assert_eq!(kept("\"adding a breaker box they want 8k.\""), 1);
+    }
+
+    #[test]
+    fn keeps_a_trim_that_changes_the_last_mark() {
+        // The source has a comma here and a question mark there; ending a
+        // shortened quotation with a full stop is ordinary trimming, and both of
+        // these were rejected by the first version of this check.
+        assert_eq!(kept("\"in my area they make as much or more than mid level software engineers.\""), 1);
+        assert_eq!(
+            kept("\"Why aren't the data centres just honest about their water usage if it's seemingly so low.\""),
+            1
+        );
+    }
+
+    #[test]
+    fn keeps_a_quote_through_html_and_curly_marks() {
+        // `it&#x27;s` in the source, `it's` in the quotation.
+        assert_eq!(kept("\"so when it's about adding a breaker box\""), 1);
+    }
+
+    #[test]
+    fn drops_an_invented_quote() {
+        assert_eq!(kept("\"Lincoln uses 30M to 60M gallons per day.\""), 0);
+    }
+
+    #[test]
+    fn drops_two_distant_fragments_stitched_together() {
+        // Both halves are in the source; they are not next to each other. This
+        // is the failure contiguity exists to catch, and the one a reader could
+        // never spot.
+        assert_eq!(
+            kept("\"in my area they make as much or more than mid level software engineers and the data centres are not honest about their water usage.\""),
+            0
+        );
+    }
+
+    #[test]
+    fn leaves_the_prose_alone() {
+        let summary = "Users are arguing about pay.\n\"not a real quote at all\"\nThe thread amounts to little.";
+        let out = drop_unverifiable_quotes(summary, SOURCE);
+        assert!(out.contains("Users are arguing about pay."));
+        assert!(out.contains("The thread amounts to little."));
+        assert!(!out.contains("not a real quote"));
+    }
 }
