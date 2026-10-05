@@ -30,17 +30,41 @@ fn session(name: &str) -> String {
     format!("check-{name}-{}", std::process::id())
 }
 
-fn pinned() -> PinnedThread {
+/// A thread from the live sidebar, as a user would have pinned it.
+///
+/// Taken live rather than hardcoded because the attachment no longer carries a
+/// summary — it names a thread and the model is expected to go and read it, so
+/// the id has to be one the thread service will actually serve. A fixed id would
+/// also rot: the corpus holds 30 days, and last month's thread stops being one.
+async fn pinned() -> PinnedThread {
+    let cards: serde_json::Value = reqwest::Client::new()
+        .post("https://www.techne.app/api/thread-cards/")
+        .json(&serde_json::json!({
+            "num_cards": 1, "hours_back": 24,
+            "sort_by": "karma_density", "density_min_comment_constant": 100
+        }))
+        .send()
+        .await
+        .expect("fetch a sidebar card")
+        .json()
+        .await
+        .expect("parse the card");
+    let card = &cards[0];
     PinnedThread {
-        story_title: Some("100s of flights cancelled at UK airports due to ATC issue".into()),
-        theme: Some("Corporate communication failures".into()),
-        summary: Some(
-            "Users value detailed frequent status updates over polite vague PR statements, \
-             and argue withholding information is a strategic choice to manage expectations \
-             and limit liability."
-                .into(),
-        ),
+        id: card["id"].as_u64().expect("card has an id"),
+        story_title: card["story_title"].as_str().map(str::to_string),
+        theme: card["theme"].as_str().map(str::to_string),
     }
+}
+
+/// The threads `get_thread` was asked to read this turn.
+fn thread_ids(reply: &AgentReply) -> Vec<u64> {
+    reply
+        .tool_calls
+        .iter()
+        .filter(|c| c.name == "get_thread")
+        .filter_map(|c| c.arguments.get("thread_id").and_then(serde_json::Value::as_u64))
+        .collect()
 }
 
 struct Report {
@@ -86,15 +110,16 @@ async fn main() {
     let embedder = Arc::new(Embedder::load().expect("load embedding model"));
     println!("(loading Gemma in-process — a minute or two)");
     let model = Arc::new(app_lib::agent::load_model().expect("load chat model"));
+    let store = Arc::new(app_lib::summary::ThreadStore::new());
 
     let mut report = Report { failures: vec![] };
 
     macro_rules! turn {
         ($sid:expr, $msg:expr) => {
-            run_turn(memory.clone(), corpus.clone(), embedder.clone(), model.clone(), $sid.to_string(), $msg.to_string(), None).await
+            run_turn(memory.clone(), corpus.clone(), embedder.clone(), model.clone(), store.clone(), $sid.to_string(), $msg.to_string(), None).await
         };
         ($sid:expr, $msg:expr, $pin:expr) => {
-            run_turn(memory.clone(), corpus.clone(), embedder.clone(), model.clone(), $sid.to_string(), $msg.to_string(), Some($pin)).await
+            run_turn(memory.clone(), corpus.clone(), embedder.clone(), model.clone(), store.clone(), $sid.to_string(), $msg.to_string(), Some($pin)).await
         };
     }
 
@@ -135,18 +160,30 @@ async fn main() {
     report.check("recalls the earlier search", low.contains("three") || low.contains('3'), &r.reply);
 
     println!("\n=== 5. pin mid-conversation, vague wording  <- the regression");
+    let pin = pinned().await;
+    println!("    pinned: {} — {:?}", pin.id, pin.story_title.as_deref().unwrap_or(""));
     let s = session("pin");
     turn!(s, "find me discussions about career");
-    turn!(s, "yes, the second one"); // decoy: a thread just read in detail
-    let r = turn!(s, "okay, can you explain about this thread now?", pinned());
-    let low = r.reply.to_lowercase();
-    let on_pin = ["flight", "atc", "airport", "transparen", "pr statement", "withhold"]
-        .iter()
-        .any(|w| low.contains(w));
-    let on_decoy = ["techie to management", "career mobility"].iter().any(|w| low.contains(w));
-    report.check("answers about the PINNED thread", on_pin, &r.reply);
-    report.check("not the decoy", !on_decoy, &r.reply);
-    report.check("no tool call needed", tools(&r).is_empty(), &format!("{:?}", tools(&r)));
+    let decoy = turn!(s, "yes, the second one"); // a thread just read in detail
+    let decoy_id = thread_ids(&decoy).first().copied();
+    let r = turn!(s, "okay, can you explain about this thread now?", pin.clone());
+    let read = thread_ids(&r);
+
+    // Checked by id rather than by what the reply says. The old version matched
+    // keywords from a hardcoded thread, which could pass on the title alone —
+    // and did: a made-up id meant the read failed and the model answered from
+    // the attachment, which the keyword check could not tell apart from success.
+    report.check(
+        "reads the PINNED thread",
+        read.contains(&pin.id),
+        &format!("read {read:?}, pinned {}", pin.id),
+    );
+    report.check(
+        "not the decoy",
+        decoy_id.is_none_or(|d| !read.contains(&d)),
+        &format!("read {read:?}, decoy {decoy_id:?}"),
+    );
+    report.check("says something about it", r.reply.len() > 40, &r.reply);
 
     println!("\n=== 6. unpin");
     let r = turn!(s, "what is this thread about?");

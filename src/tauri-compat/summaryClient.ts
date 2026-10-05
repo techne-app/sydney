@@ -7,8 +7,15 @@
  * discussion. So a summary the user asks for is generated fresh, from the
  * comments as they stand, by the local model.
  *
- * Slow by nature: fetching the thread takes a couple of seconds and the model
- * takes another twenty or so. The caller must show that it is working.
+ * Slow the first time: fetching the thread takes a second and the model takes
+ * another twenty. The caller must show that it is working.
+ *
+ * There is no cache here any more. There used to be a `Map` in this file, which
+ * worked for the modal and was invisible to everything else — the agent runs in
+ * Rust and cannot see a JavaScript object, so asking the chat about a thread
+ * just read here would summarise it all over again. The cache now lives in
+ * `ThreadStore` on the Rust side, where both can reach it: whichever asks first
+ * pays, and the other is instant, in either direction.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
@@ -23,29 +30,12 @@ export interface ThreadSummary {
   total: number;
 }
 
-/**
- * Summaries already produced this session, by thread id.
- *
- * Reopening a card should not spend twenty seconds regenerating what the user
- * just read. The staleness this feature exists to fix is measured in hours —
- * nothing moves in the minutes an app session lasts — so holding them until
- * restart costs nothing in freshness.
- */
-const cache = new Map<number, ThreadSummary>();
-
 export async function summarizeThread(threadId: number): Promise<ThreadSummary> {
-  const cached = cache.get(threadId);
-  if (cached) {
-    logger.chat(`[summary] thread ${threadId}: from this session's cache`);
-    return cached;
-  }
-
   const started = Date.now();
   const result = await invoke<ThreadSummary>('summarize_thread_command', { threadId });
   logger.chat(
     `[summary] thread ${threadId}: ${result.used}/${result.total} comments in ` +
     `${Math.round((Date.now() - started) / 1000)}s`
   );
-  cache.set(threadId, result);
   return result;
 }

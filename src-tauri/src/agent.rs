@@ -51,18 +51,28 @@ const BASE_INSTRUCTION: &str = concat!(
     "not invent discussions, titles, or links. If you do not have enough ",
     "information to answer, say so plainly rather than guessing. Do not show ",
     "thread ids to the user; they are for your own tool calls.",
-    "\n\nA message may begin with a note about a discussion the user has open ",
+    "\n\nA message may begin with a note naming a discussion the user has open ",
     "in front of them. When they say \"this thread\", \"this discussion\", ",
     "\"this\", or \"this one\", they mean that one — not an item from a list ",
-    "of search results. Answer from the note; there is no need to search."
+    "of search results. Read it with get_thread rather than searching.",
+    "\n\nget_thread returns the first comments of a thread, not all of them, and ",
+    "says how many. If what you were asked about is not in them, say it was not ",
+    "in the part you read. Never settle a question by what is missing.",
+    "\n\nGive figures exactly as the comments give them. Do not convert, scale, ",
+    "combine or estimate a number, and do not turn a single figure into a range. ",
+    "If a comment says a city used some amount on one day, that is what it says — ",
+    "not what the city uses per day."
 );
 
 /// The thread the user has dragged into the chat, as the frontend sends it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PinnedThread {
+    /// Needed so the model can actually go and read it. Without an id the
+    /// attachment was a dead end: it described a thread the model had no way to
+    /// open, so the only thing it could do was repeat the description back.
+    pub id: u64,
     pub story_title: Option<String>,
     pub theme: Option<String>,
-    pub summary: Option<String>,
 }
 
 /// The pinned thread travels WITH the message it was sent alongside, rather
@@ -76,12 +86,18 @@ pub struct PinnedThread {
 fn with_attachment(message: &str, pinned: Option<&PinnedThread>) -> String {
     match pinned {
         None => message.to_string(),
+        // The id, not a summary. This used to carry the corpus's stored summary,
+        // which the pipeline writes once and never revises — on a measured card
+        // it described 2 comments of a 151-comment discussion. Worse, handing
+        // over a summary decides in advance what can be asked: 130 words cannot
+        // answer "did anyone mention performance?". Naming the thread instead
+        // lets the model go and read it when the question needs it.
         Some(t) => format!(
-            "[The user has this discussion open in front of them:\n\"{}\" — {}.\nWhat people said: {}]\n\n{}",
-            // It's t.story_title or ""
+            "[The user has this discussion open in front of them: thread {} — \"{}\", about {}. \
+             Call get_thread with that id to read what people actually said.]\n\n{}",
+            t.id,
             t.story_title.as_deref().unwrap_or(""),
             t.theme.as_deref().unwrap_or(""),
-            t.summary.as_deref().unwrap_or(""),
             message
         ),
     }
@@ -184,6 +200,7 @@ pub struct ThreadArgs {
 
 struct GetThread {
     corpus: Arc<crate::corpus::Corpus>,
+    store: Arc<crate::summary::ThreadStore>,
     collected: Shared,
 }
 
@@ -194,10 +211,11 @@ impl Tool for GetThread {
     type Error = ToolFailed;
 
     fn description(&self) -> String {
-        "Get the full summary of one Hacker News discussion thread. Use this when \
-         the user asks about a specific discussion you have already found — for \
-         example \"what was the second one about?\". Search results carry only a \
-         title and a one-line description; this returns what was actually discussed."
+        "Read the comments of one Hacker News discussion. Use it whenever the user \
+         asks anything about a specific thread — what it is about, what people \
+         argued, whether anyone mentioned something in particular — including the \
+         discussion they currently have open. Search results carry only a title \
+         and a one-line description; this returns what people actually wrote."
             .into()
     }
 
@@ -220,26 +238,50 @@ impl Tool for GetThread {
             arguments: json!({ "thread_id": args.thread_id }),
         });
 
-        let Some(meta) = self.corpus.get(args.thread_id) else {
-            return Ok(serde_json::json!({
-                "error": "No thread with that id is in the last 30 days of data. \
-                          Search for the topic instead."
-            }));
-        };
+        // The corpus is consulted for the title and the link, not for permission.
+        // It used to refuse outright for an id it did not hold, which was right
+        // when the corpus WAS the answer — the tool returned a row from it. Now
+        // the comments come from the thread service, which has every thread, so
+        // refusing on a corpus miss would turn "not in our last 30 days of
+        // metadata" into "cannot be read", which is not true.
+        let meta = self.corpus.get(args.thread_id);
 
         // The link is split off here and never handed to the model. Given a URL
         // it writes it into its prose, and the UI renders the same link again
         // from `results`. Taking it out is what makes that impossible rather
         // than merely discouraged.
-        if let Some(link) = meta.anchor.clone() {
+        if let Some(link) = meta.as_ref().and_then(|m| m.anchor.clone()) {
             self.collected.lock().unwrap().results.push(UiResult {
-                thread_id: meta.thread_id,
-                title: meta.story_title.clone().unwrap_or_default(),
+                thread_id: args.thread_id,
+                title: meta.as_ref().and_then(|m| m.story_title.clone()).unwrap_or_default(),
                 link,
             });
         }
 
-        let body = crate::corpus::public_view(&meta, true);
+        // The thread itself, not the corpus's stored summary. `public_view` still
+        // supplies the title and theme, which are cheap and orient the model,
+        // but the body is now what people wrote.
+        let mut body = match &meta {
+            Some(meta) => crate::corpus::public_view(meta, false),
+            None => json!({ "thread_id": args.thread_id }),
+        };
+
+        match self.store.comments(args.thread_id).await {
+            Ok((text, used, total)) => {
+                body["comments"] = text.into();
+                // Said plainly because the model cannot see the edge of what it
+                // was given. Without this it answers "nobody mentioned X" when
+                // the truth is "nobody in the first 27 comments mentioned X",
+                // which is the shape every hallucination in this project took.
+                body["coverage"] = format!(
+                    "These are the first {used} of {total} comments, in reply order.                      If the answer is not here, say it was not in the part you could read."
+                )
+                .into();
+            }
+            // The corpus row alone is still worth answering from.
+            Err(error) => body["comments_unavailable"] = error.into(),
+        }
+
         Ok(body)
     }
 }
@@ -329,6 +371,7 @@ pub async fn send_message(
     corpus: tauri::State<'_, AppCorpus>,
     embedder: tauri::State<'_, AppEmbedder>,
     model: tauri::State<'_, Model>,
+    store: tauri::State<'_, Arc<crate::summary::ThreadStore>>,
     session_id: String,
     message: String,
     pinned_thread: Option<PinnedThread>,
@@ -341,6 +384,7 @@ pub async fn send_message(
         corpus.0.clone(),
         embedder,
         model,
+        store.inner().clone(),
         session_id,
         message,
         pinned_thread,
@@ -355,6 +399,7 @@ pub async fn run_turn(
     corpus: Arc<crate::corpus::Corpus>,
     embedder: Arc<crate::search::Embedder>,
     model: Arc<rig_llama_cpp::Client>,
+    store: Arc<crate::summary::ThreadStore>,
     session_id: String,
     message: String,
     pinned_thread: Option<PinnedThread>,
@@ -381,6 +426,7 @@ pub async fn run_turn(
         })
         .tool(GetThread {
             corpus,
+            store,
             collected: collected.clone(),
         })
         // Rig runs ONE model call by default, so without this any tool use dies

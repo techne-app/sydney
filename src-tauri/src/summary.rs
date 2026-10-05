@@ -1,16 +1,22 @@
-//! On-demand thread summaries, generated locally.
+//! Reading a Hacker News thread, and summarising one.
 //!
 //! The corpus already carries a summary for every thread, but it was written
 //! once when the pipeline first analysed the thread and never revised. Measured
 //! on a live card: the stored summary had seen 2 comments; the thread had 151.
-//! It described 2% of the conversation. So a summary the user asks for has to be
-//! generated from the comments as they stand now.
+//! It described 2% of the conversation. So anything the user asks for has to
+//! come from the comments as they stand now.
 //!
 //! The raw comments come from techne.app rather than HN's own API: the backend
 //! holds every comment already, within about six minutes of live HN, so this is
 //! one request instead of the ~600 that walking HN's tree would take.
+//!
+//! Reading a thread and summarising it are kept separate, because they cost
+//! wildly different amounts — about a second against about twenty. The agent
+//! needs the reading so it can answer what a summary cannot ("did anyone mention
+//! performance?"), and should not pay for a summary to get it.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use rig_core::agent::AgentBuilder;
 use rig_core::client::CompletionClient;
@@ -19,6 +25,10 @@ use serde::Deserialize;
 
 const THREAD_TREE_URL: &str = "https://techne.app/api/thread-tree";
 
+/// Closes every comment block. Clipping splits on this, so a thread is always
+/// cut between comments and never through the middle of one.
+const END_MARKER: &str = "---END-COMMENT---\n";
+
 /// How much thread text reaches the model, in characters.
 ///
 /// Characters rather than tokens because counting tokens needs the tokenizer,
@@ -26,8 +36,11 @@ const THREAD_TREE_URL: &str = "https://techne.app/api/thread-tree";
 /// real HN threads, our formatting runs at **~3.5 characters per token** —
 /// consistently, across budgets from 8k to 30k.
 ///
-/// 14,000 chars is about 4,000 tokens — comfortably inside the 8,192 window
-/// alongside the instruction and the answer.
+/// 14,000 chars is about 4,000 tokens, and it serves both callers. That it fits
+/// the agent too was worth measuring (`--bin context_budget`) rather than
+/// assuming: the agent's instruction and both tool schemas come to only 316
+/// tokens, and `max_tokens(2048)` is the real fixed cost, which leaves ~20,000
+/// characters free in a fresh chat.
 ///
 /// The number is chosen from where threads actually divide rather than from the
 /// window alone. Comments arrive in depth order, and across a sample of live
@@ -37,8 +50,12 @@ const THREAD_TREE_URL: &str = "https://techne.app/api/thread-tree";
 /// not the deep sub-arguments.
 ///
 /// It is also what the wait costs: prefill runs at ~230 tok/s and dominates
-/// (generation is ~50 tok/s but only ~400 tokens), so this is roughly 25s on a
-/// big thread against 32s at 20,000, and ~12s on a small one either way.
+/// (generation is ~50 tok/s but only ~400 tokens), so this is roughly 20s on a
+/// big thread and ~11s on a small one.
+///
+/// What it does *not* leave room for is the agent reading two threads in one
+/// conversation: a thread it has read stays in the history and is re-sent every
+/// turn, so a second read overflows the window where fifty exchanges would not.
 ///
 /// `n_ctx` is 8,192 and cannot currently go higher: rig-llama-cpp fails above
 /// it on this model (Decode Error -3 at 16,384), while llama-server runs the
@@ -54,19 +71,56 @@ pub struct Comment {
     pub text: Option<String>,
 }
 
+/// A thread as the model sees it: every comment, formatted, nothing dropped.
+///
+/// Held whole rather than pre-clipped because the budget belongs to the caller,
+/// not to the thread. Clipping is taking whole blocks off the front, which costs
+/// microseconds, so holding all of it costs one fetch and ~200KB and leaves the
+/// budget free to change.
+#[derive(Clone)]
+pub struct Thread {
+    text: String,
+    /// Comments the thread has, including the ones a clip will drop.
+    pub total: usize,
+}
+
+impl Thread {
+    /// The first whole comments that fit in `budget`, and how many that was.
+    pub fn clip(&self, budget: usize) -> (String, usize) {
+        let mut out = String::new();
+        let mut used = 0;
+
+        for block in self.text.split_inclusive(END_MARKER) {
+            if block.trim().is_empty() {
+                continue;
+            }
+            // Skip a comment that will not fit rather than stopping here: one
+            // long comment early in the thread would otherwise discard every
+            // shorter one behind it. Measured on a live thread, stopping wasted
+            // 18% of the budget. Later comments are deeper, so this trades
+            // strict depth order for using the window we have.
+            if out.len() + block.len() > budget {
+                continue;
+            }
+            out.push_str(block);
+            used += 1;
+        }
+        (out, used)
+    }
+}
+
 /// Flatten the tree for the model.
 ///
 /// Usernames become stable anonymous ids — U1, U2 — so the model can follow who
 /// is replying to whom without real handles steering it toward a person's
 /// reputation rather than their argument.
 ///
-/// Comments are kept in the order given, which is depth order, so truncation
-/// drops the deep nested tangents and keeps the shallow spine of the
-/// conversation. That ordering is the endpoint's contract, not an accident.
-fn format_thread(comments: &[Comment]) -> (String, usize) {
+/// Comments are kept in the order given, which is depth order, so a clip drops
+/// the deep nested tangents and keeps the shallow spine of the conversation.
+/// That ordering is the endpoint's contract, not an accident.
+fn format_thread(comments: &[Comment]) -> String {
     let mut users: Vec<&str> = Vec::new();
     let mut out = String::new();
-    let mut used = 0;
 
     for comment in comments {
         let Some(text) = comment.text.as_deref().filter(|t| !t.is_empty()) else {
@@ -81,19 +135,40 @@ fn format_thread(comments: &[Comment]) -> (String, usize) {
             }
         };
 
-        let block = format!("<<depth={}>> [[uid=U{uid}]]\n{text}\n---END-COMMENT---\n", comment.depth);
-        // Skip a comment that will not fit rather than stopping here: one long
-        // comment early in the thread would otherwise discard every shorter one
-        // behind it. Measured on a live thread, stopping wasted 18% of the
-        // budget. Later comments are deeper, so this trades strict depth order
-        // for using the window we have.
-        if out.len() + block.len() > MAX_THREAD_CHARS {
-            continue;
-        }
-        out.push_str(&block);
-        used += 1;
+        out.push_str(&format!(
+            "<<depth={}>> [[uid=U{uid}]]\n{text}\n{END_MARKER}",
+            comment.depth
+        ));
     }
-    (out, used)
+    out
+}
+
+/// Fetch one thread and format it. About a second; the model is not involved.
+async fn read_thread(thread_id: u64) -> Result<Thread, String> {
+    let started = std::time::Instant::now();
+    let comments: Vec<Comment> = reqwest::Client::new()
+        .get(format!("{THREAD_TREE_URL}/{thread_id}/"))
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("could not reach the thread service: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("thread service returned {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("could not read the thread: {e}"))?;
+
+    let total = comments.len();
+    let text = format_thread(&comments);
+    if text.is_empty() {
+        return Err("That discussion has no readable comments yet.".into());
+    }
+    println!(
+        "[thread] {thread_id}: {total} comments, {} chars (fetch {:.1}s)",
+        text.len(),
+        started.elapsed().as_secs_f32()
+    );
+    Ok(Thread { text, total })
 }
 
 const INSTRUCTION: &str = concat!(
@@ -109,69 +184,117 @@ const INSTRUCTION: &str = concat!(
 
 pub struct ThreadSummary {
     pub summary: String,
-    /// How many comments were actually fed to the model, and how many the thread
-    /// has. A long thread is truncated, and the UI should be able to say so
-    /// rather than implying the summary covers everything.
+    /// Comments actually read, and how many the thread has. These differ on a
+    /// busy thread, and the gap is the honest bound on everything downstream —
+    /// the UI says so rather than implying the summary covers the whole thing.
     pub used: usize,
     pub total: usize,
+    /// Characters actually handed to the model. Only the checks look at this —
+    /// it is how they tell a full budget from a wasted one.
+    pub chars: usize,
 }
 
-pub async fn summarize_thread(
-    model: &Arc<rig_llama_cpp::Client>,
-    thread_id: u64,
-) -> Result<ThreadSummary, String> {
-    let started = std::time::Instant::now();
-    let comments: Vec<Comment> = reqwest::Client::new()
-        .get(format!("{THREAD_TREE_URL}/{thread_id}/"))
-        .timeout(std::time::Duration::from_secs(60))
-        .send()
-        .await
-        .map_err(|e| format!("could not reach the thread service: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("thread service returned {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("could not read the thread: {e}"))?;
+/// What one thread costs, paid at most once.
+#[derive(Default)]
+struct Entry {
+    thread: Option<Thread>,
+    summary: Option<String>,
+}
 
-    let fetched = started.elapsed();
-    let total = comments.len();
-    let (text, used) = format_thread(&comments);
-    if text.is_empty() {
-        return Err("That discussion has no readable comments yet.".into());
+/// Every thread anyone has looked at this session.
+///
+/// This exists because the modal and the chat are otherwise strangers. The
+/// modal's cache used to be a `Map` in the webview, which the Rust agent cannot
+/// see, so asking the chat about a thread just read in the modal would re-do —
+/// or contradict — work already done. One store in Rust is what makes the two
+/// surfaces agree.
+///
+/// In memory only, so it empties on quit. Deliberate: a thread grows, and a
+/// summary kept across restarts would recreate the staleness this exists to fix.
+/// Nothing moves in the minutes a session lasts.
+pub struct ThreadStore {
+    /// The outer lock guards the map and is never held across an await. The
+    /// inner one guards a single thread's work and is — which is what makes two
+    /// callers arriving at once wait on one fetch rather than racing to do it
+    /// twice. Worth the care: the summary they would race on costs 20 seconds.
+    entries: Mutex<HashMap<u64, Arc<tokio::sync::Mutex<Entry>>>>,
+}
+
+impl ThreadStore {
+    pub fn new() -> Self {
+        Self { entries: Mutex::new(HashMap::new()) }
     }
-    println!(
-        "[summary] thread {thread_id}: {used}/{total} comments, {} chars (fetch {:.1}s)",
-        text.len(),
-        fetched.as_secs_f32()
-    );
-    let before_model = std::time::Instant::now();
 
-    let agent = AgentBuilder::new(model.completion_model("gemma"))
-        .preamble(INSTRUCTION)
-        // Low, unlike the pipeline's 1.0: this is triggered by a click, and
-        // clicking the same card twice should not produce two different
-        // summaries of the same conversation.
-        .temperature(0.1)
-        // Room for one or two paragraphs. Measured: summaries land around 400
-        // tokens and generation runs at ~50 tok/s, so this caps waste without
-        // truncating. It is not where the time goes — prefill is ~3x the cost
-        // of generation here.
-        .max_tokens(500)
-        .additional_params(serde_json::json!({ "thinking": false }))
-        .build();
+    fn entry(&self, thread_id: u64) -> Arc<tokio::sync::Mutex<Entry>> {
+        self.entries.lock().unwrap().entry(thread_id).or_default().clone()
+    }
 
-    let summary = agent
-        .prompt(text)
-        .await
-        .map_err(|e| format!("the model could not summarise that thread: {e}"))?;
+    /// The thread's comments, clipped to what the model can hold, with the count
+    /// of what was left out. Fetched the first time, free afterwards.
+    pub async fn comments(&self, thread_id: u64) -> Result<(String, usize, usize), String> {
+        let entry = self.entry(thread_id);
+        let mut entry = entry.lock().await;
 
-    println!("[summary] model took {:.1}s", before_model.elapsed().as_secs_f32());
+        if entry.thread.is_none() {
+            entry.thread = Some(read_thread(thread_id).await?);
+        }
+        let thread = entry.thread.as_ref().expect("just filled in");
+        let (text, used) = thread.clip(MAX_THREAD_CHARS);
+        Ok((text, used, thread.total))
+    }
 
-    Ok(ThreadSummary {
-        summary: summary.trim().to_string(),
-        used,
-        total,
-    })
+    /// A summary written from the thread's current comments. Twenty seconds the
+    /// first time, free afterwards — including when the other surface asks.
+    pub async fn summary(
+        &self,
+        model: &Arc<rig_llama_cpp::Client>,
+        thread_id: u64,
+    ) -> Result<ThreadSummary, String> {
+        let entry = self.entry(thread_id);
+        let mut entry = entry.lock().await;
+
+        if entry.thread.is_none() {
+            entry.thread = Some(read_thread(thread_id).await?);
+        }
+        let thread = entry.thread.as_ref().expect("just filled in");
+        let total = thread.total;
+        let (text, used) = thread.clip(MAX_THREAD_CHARS);
+
+        if let Some(summary) = &entry.summary {
+            println!("[summary] thread {thread_id}: already written this session");
+            return Ok(ThreadSummary { summary: summary.clone(), used, total, chars: text.len() });
+        }
+
+        let text_len = text.len();
+        println!("[summary] thread {thread_id}: {used}/{total} comments, {text_len} chars");
+        let started = std::time::Instant::now();
+
+        let agent = AgentBuilder::new(model.completion_model("gemma"))
+            .preamble(INSTRUCTION)
+            // Low, unlike the pipeline's 1.0: this is triggered by a click, and
+            // clicking the same card twice should not produce two different
+            // summaries of the same conversation.
+            .temperature(0.1)
+            // Room for one or two paragraphs. Measured: summaries land around
+            // 400 tokens and generation runs at ~50 tok/s, so this caps waste
+            // without truncating. It is not where the time goes — prefill is
+            // ~3x the cost of generation here.
+            .max_tokens(500)
+            .additional_params(serde_json::json!({ "thinking": false }))
+            .build();
+
+        let summary = agent
+            .prompt(text)
+            .await
+            .map_err(|e| format!("the model could not summarise that thread: {e}"))?
+            .trim()
+            .to_string();
+
+        println!("[summary] model took {:.1}s", started.elapsed().as_secs_f32());
+        entry.summary = Some(summary.clone());
+
+        Ok(ThreadSummary { summary, used, total, chars: text_len })
+    }
 }
 
 /// What the frontend calls when someone clicks a thread card. Not an agent
@@ -179,12 +302,13 @@ pub async fn summarize_thread(
 #[tauri::command]
 pub async fn summarize_thread_command(
     model: tauri::State<'_, crate::agent::Model>,
+    store: tauri::State<'_, Arc<ThreadStore>>,
     thread_id: u64,
 ) -> Result<serde_json::Value, String> {
     let Some(model) = model.0.get() else {
         return Err("The model is still loading.".into());
     };
-    let result = summarize_thread(&model, thread_id).await?;
+    let result = store.summary(&model, thread_id).await?;
     Ok(serde_json::json!({
         "summary": result.summary,
         "used": result.used,
