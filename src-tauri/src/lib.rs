@@ -37,6 +37,10 @@ pub fn run() {
     .manage(agent::Model(agent::Loaded::new(
       agent::load_model().expect("failed to load the chat model"),
     )))
+    // Threads anyone has read this session, shared by the modal and the agent
+    // so neither repeats the other's work. Empty at startup; it fills as cards
+    // are opened and costs nothing until then.
+    .manage(std::sync::Arc::new(summary::ThreadStore::new()))
     .invoke_handler(tauri::generate_handler![
       open_external_url,
       agent::send_message,

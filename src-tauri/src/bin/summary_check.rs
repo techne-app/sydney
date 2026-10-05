@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use app_lib::summary::summarize_thread;
+use app_lib::summary::ThreadStore;
 
 #[tokio::main]
 async fn main() {
@@ -51,7 +51,8 @@ async fn main() {
 
     println!("\n=== summarise ===");
     let started = std::time::Instant::now();
-    let result = match summarize_thread(&model, thread_id).await {
+    let store = ThreadStore::new();
+    let result = match store.summary(&model, thread_id).await {
         Ok(result) => result,
         Err(error) => {
             println!("  FAIL  summarise succeeds  {error}");
@@ -86,16 +87,39 @@ async fn main() {
         result.summary.chars().take(60).collect(),
     );
 
-    // The whole point of the feature: the fresh summary should reflect more of
-    // the conversation than the stored one did.
-    let stored_saw = card["comment_count"].as_u64().unwrap_or(0);
+    // Reads as much of the thread as it can hold.
+    //
+    // This used to compare `used` against the card's `comment_count`, which was
+    // wrong twice over: that number is the thread's size, not what the stored
+    // summary saw, and we clip on purpose, so "read every comment" can never
+    // pass on a busy thread. It only ever passed because an explicit thread id
+    // left it comparing one thread's reading against another thread's size.
+    //
+    // What actually matters is that nothing is wasted: either the whole thread
+    // fitted, or the budget came out close to full. A long comment early on used
+    // to end the loop and discard every shorter one behind it, leaving 18% of
+    // the budget unspent — this is the check that would have caught it.
+    let whole_thread = result.used == result.total;
     check(
-        "covers at least as much as the stored summary",
-        result.used as u64 >= stored_saw.min(result.total as u64),
-        format!("fresh saw {}, stored saw {stored_saw}", result.used),
+        "reads as much of the thread as it can hold",
+        whole_thread || result.chars * 100 / 14_000 >= 90,
+        if whole_thread {
+            format!("whole thread, {} comments", result.total)
+        } else {
+            format!("{}/{} comments, {} of 14,000 chars", result.used, result.total, result.chars)
+        },
     );
 
     println!("\n{}", "=".repeat(46));
+
+    // Free the model before the process tears down. llama.cpp frees the Metal
+    // device in a static destructor, and aborts there if a model is still
+    // alive — the same crash `Loaded` exists to prevent in the app. Without
+    // this the run ends in a GGML_ASSERT backtrace after the results, which
+    // looks exactly like a failure and is not one.
+    drop(store);
+    drop(model);
+
     if failures == 0 {
         println!("ALL PASSED");
     } else {

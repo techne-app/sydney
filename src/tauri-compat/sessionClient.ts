@@ -55,15 +55,17 @@ class SessionClient {
     const data = await invoke<AgentResponse>('send_message', {
       sessionId,
       message,
-      // Only what the attachment note is built from. `category` and
-      // `comment_count` were being sent and never read — they are our
-      // taxonomy and a number, and neither answers anything the user asks
-      // about the thread they have open.
+      // The id is the important part: it is what lets the agent go and read the
+      // discussion. This used to send `summary` instead — the card's stored one,
+      // written once by the pipeline and never revised — which left the model
+      // nothing to do but repeat it back, and no way to answer anything it did
+      // not already cover. Title and theme stay because they orient the model
+      // cheaply, before it decides whether reading is needed at all.
       pinnedThread: pinnedThread
         ? {
+            id: pinnedThread.id,
             story_title: pinnedThread.story_title,
             theme: pinnedThread.theme,
-            summary: pinnedThread.summary,
           }
         : null,
     });
