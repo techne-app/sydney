@@ -142,15 +142,21 @@ code against live data:
 
 ```bash
 cd src-tauri
-cargo run --bin check          # the agent: tools, history, pinned threads
-cargo run --bin search_check   # embeddings and reranking
-cargo run --bin corpus_check   # the 30-day corpus
-cargo run --bin summary_check  # thread summaries
+cargo run --example check          # the agent: tools, history, pinned threads
+cargo run --example search_check   # embeddings and reranking
+cargo run --example corpus_check   # the 30-day corpus
+cargo run --example summary_check  # thread summaries
 ```
 
 **Close the app first.** Each loads its own 12GB Gemma and 24GB cannot hold two.
 The symptom is not an out-of-memory error — it is empty replies and `Decode Error
 -3`, which reads exactly like a prompt regression. This has cost hours twice.
+
+They live in `examples/`, not `src/bin/`, and that is deliberate: Tauri bundles
+anything in `src/bin` into the shipped `.app`, and a 14MB check runner was found
+riding along inside it. Every executable in an App Store bundle has to be signed
+and sandboxed too, so it would have failed validation. Cargo does not build
+examples during a normal build, so there is nothing to pick up.
 
 `npx tsc --noEmit` is clean and can be trusted as a gate. There is no CI.
 
