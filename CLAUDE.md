@@ -154,6 +154,29 @@ The symptom is not an out-of-memory error — it is empty replies and `Decode Er
 
 `npx tsc --noEmit` is clean and can be trusted as a gate. There is no CI.
 
+## Building for release
+
+`npm run tauri:build` produces the `.app` and `.dmg` under
+`src-tauri/target/release/bundle/`. Apple Silicon only — a 12GB model is not
+worth running on an Intel Mac.
+
+**`bundle.macOS.minimumSystemVersion` must stay at 11.0 or higher.** Without it
+Tauri sets `MACOSX_DEPLOYMENT_TARGET` to 10.13 and llama.cpp will not compile:
+`'path' is unavailable: introduced in macOS 10.15`. 11.0 is the floor for Apple
+Silicon anyway.
+
+If a build has already failed that way, fixing the config is not enough — CMake
+caches the old deployment target and goes on using it:
+
+```bash
+cd src-tauri && cargo clean --release -p llama-cpp-sys-2
+```
+
+A release build holds **three copies of the models at once** — the source in
+`models/`, a copy inside the `.app`, and another inside the `.dmg` — roughly
+54GB with the Rust artefacts. That is why releases are built locally rather than
+on CI, where runners have far less disk than that.
+
 ## Conventions
 
 - **Planning lives in GitHub issues**, not markdown in the repo.
